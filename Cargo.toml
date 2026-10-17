@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/geeooff/exchange-catastrophic-migration"
+authors = ["Geoffrey Vancoetsem"]
+publish = false
+
+[workspace.dependencies]
+ecm-audit = { path = "crates/ecm-audit" }
+ecm-ews = { path = "crates/ecm-ews" }
+ecm-http = { path = "crates/ecm-http" }
+ecm-model = { path = "crates/ecm-model" }
+ecm-pst = { path = "crates/ecm-pst" }
+ecm-store = { path = "crates/ecm-store" }
+
+clap = { version = "4.5", features = ["derive"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

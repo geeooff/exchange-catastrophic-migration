@@ -1,0 +1,17 @@
+[package]
+name = "ecm-ews"
+description = "Exchange Web Services client, used as both source and target."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+ecm-model.workspace = true
+ecm-http.workspace = true
+
+[lints]
+workspace = true
