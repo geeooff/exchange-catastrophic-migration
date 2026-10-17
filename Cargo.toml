@@ -19,6 +19,10 @@ ecm-pst = { path = "crates/ecm-pst" }
 ecm-store = { path = "crates/ecm-store" }
 
 clap = { version = "4.5", features = ["derive"] }
+outlook-pst = "1.2"
+sha2 = "0.11"
+tempfile = "3"
+thiserror = "2"
 
 [workspace.lints.rust]
 missing_docs = "warn"

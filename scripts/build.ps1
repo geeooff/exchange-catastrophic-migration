@@ -115,7 +115,14 @@ function Invoke-Tests {
     Step "No mailbox data is tracked"
     $tracked = & git ls-files
     if ($LASTEXITCODE -ne 0) { Fail "git ls-files exited $LASTEXITCODE" }
-    $data = @($tracked | Where-Object { $_ -match '\.(pst|ost|msg|eml|ics|vcf|sqlite3?|db)$' -or $_ -match '^(private|reports|backups)/' })
+    # Test fixtures are the one exception, and each must be listed by name in its
+    # folder's README, which says where it comes from.
+    function Test-Fixture([string] $file) {
+        if ($file -notmatch '^crates/[^/]+/tests/fixtures/([^/]+)$') { return $false }
+        $readme = Join-Path $root ($file -replace '[^/]+$', 'README.md')
+        (Test-Path $readme) -and (Select-String -Path $readme -Pattern "``$($Matches[1])``" -SimpleMatch -Quiet)
+    }
+    $data = @($tracked | Where-Object { ($_ -match '\.(pst|ost|msg|eml|ics|vcf|sqlite3?|db)$' -and -not (Test-Fixture $_)) -or $_ -match '^(private|reports|backups)/' })
     if ($data) {
         $data | ForEach-Object { Write-Host "    tracked: $_" -ForegroundColor Red }
         Fail "mailbox data or private notes are tracked by git"
