@@ -164,8 +164,8 @@ property.
 
 | # | Deliverable | Done when |
 |---|---|---|
-| M0 | Workspace, CI (fmt, clippy, tests), contribution guide | CI is green on an empty skeleton |
-| M1 | `source check` on PST | Folder tree and item counts match what Outlook shows for a test PST; checksum unchanged after the run |
+| M0 ✅ | Workspace, CI (fmt, clippy, tests), contribution guide | CI is green on an empty skeleton |
+| M1 ✅ | `source check` on PST | Folder tree and item counts match what Outlook shows for a test PST; checksum unchanged after the run |
 | M2 | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
 | M3 | Spike: re-upload fidelity | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
 | M4 | `inventory` + `audit` | HTML/CSV report with classes and defects; tested on synthetic damaged mailboxes |
@@ -184,6 +184,9 @@ property.
 
 ## 9. Risks and open questions
 
+- `outlook_pst::open_store` also opens the file **for writing** when it can. `ecm-pst`
+  never calls it: it opens the file itself, read-only and sharing read access only, and
+  passes the handle to `UnicodePstFile::read_from`, which has no writer.
 - How much of the PST format `outlook-pst` exposes: named properties, attachments,
   embedded messages, compressed RTF bodies, recurrence data. To check in M1.
 - EWS limits on hosted Exchange: throttling, maximum request size (large attachments).

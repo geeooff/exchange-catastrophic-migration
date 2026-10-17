@@ -8,7 +8,9 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: planning.** Nothing is implemented yet. See [docs/plan.md](docs/plan.md).
+> **Status: early development.** Only `ecm source check --pst <file>` works so far: it
+> opens a PST read-only, prints its folder tree with item counts, and proves the file
+> was not modified. See [docs/plan.md](docs/plan.md).
 
 ## What it will do
 
