@@ -66,6 +66,7 @@ Cargo workspace:
 | `ecm-model` | Common model: folders, items, property bags (MAPI tags and named properties), fingerprints |
 | `ecm-pst` | PST source, built on Microsoft's `outlook-pst` |
 | `ecm-ews` | EWS client: SOAP requests, paging, throttling and retries, source and target |
+| `ecm-graph` | Microsoft Graph source (Outlook.com, Microsoft 365): device code sign-in, mail folders, messages; read-only |
 | `ecm-http` | HTTP transport with NTLM/Negotiate. First implementation: WinHTTP through Microsoft's `windows` crate. Possible portable implementation later (`reqwest` + an SSPI/NTLM crate) |
 | `ecm-store` | Local state as files: inventories (JSON Lines), CSV reports, later plans and journal |
 | `ecm-audit` | Matching, defect detection, reports |
@@ -175,6 +176,7 @@ property.
 | M5 | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
 | M6 | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
 | M7 | Exchange (EWS) as a source | Same results as with a PST of the same mailbox |
+| M7b | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
 | M8 | Release 0.1 | Documentation, binaries for Windows x64 |
 
 ## 8. Testing

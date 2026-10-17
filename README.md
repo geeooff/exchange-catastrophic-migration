@@ -18,6 +18,8 @@ arrived after the migration.
 >   (`ExportItems`) of the mailbox.
 > - `ecm inventory` and `ecm audit`: match a PST with a mailbox item by item and report
 >   what is ok, misplaced, damaged, missing, duplicated, new or unmatched (CSV).
+> - `ecm inventory --outlook-com --client-id <id>`: an Outlook.com mailbox as a second
+>   source, read through Microsoft Graph after a browser sign-in (`ecm audit --source outlook`).
 >
 > See [docs/plan.md](docs/plan.md).
 

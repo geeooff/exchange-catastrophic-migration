@@ -16,6 +16,7 @@ path = "src/main.rs"
 clap.workspace = true
 ecm-audit.workspace = true
 ecm-ews.workspace = true
+ecm-graph.workspace = true
 ecm-model.workspace = true
 ecm-pst.workspace = true
 ecm-store.workspace = true

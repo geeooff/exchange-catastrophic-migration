@@ -12,7 +12,8 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - `ecm-http`: WinHTTP + NTLM/Negotiate, Credential Manager. Only crate with `unsafe`.
 - `ecm-ews`: hand-written SOAP + `quick-xml` tree: GetFolder, FindFolder, FindItem,
   ExportItems, backup.
-- `ecm-store`, `ecm-audit`: empty for now.
+- `ecm-graph`: read-only Microsoft Graph source (Outlook.com), device code sign-in.
+- `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching and defects.
 - `ecm-cli`: the `ecm` binary.
 
 ## Rules

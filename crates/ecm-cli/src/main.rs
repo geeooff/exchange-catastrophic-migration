@@ -50,6 +50,19 @@ enum Command {
         /// Credential name for `--ews`, `ecm:HOST` by default.
         #[arg(long, value_name = "NAME", requires = "ews")]
         credential: Option<String>,
+        /// Also inventory an Outlook.com mailbox through Microsoft Graph, as a
+        /// second source (`outlook.jsonl`). You sign in in your browser with a code;
+        /// only read permissions are asked for.
+        #[arg(long, requires = "client_id")]
+        outlook_com: bool,
+        /// Client id of the app registration used to sign in to Microsoft Graph
+        /// (personal accounts, public client flows, delegated `Mail.Read`).
+        #[arg(long, value_name = "ID")]
+        client_id: Option<String>,
+        /// Sign-in authority: `consumers` for Outlook.com, `organizations` or a
+        /// tenant id for Microsoft 365.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
     },
     /// Match the inventories and report what is OK, misplaced, degraded, missing or
     /// duplicated, as a summary and CSV files in the work directory.
@@ -61,6 +74,9 @@ enum Command {
         /// received from that day on are new mail, kept as they are.
         #[arg(long, value_name = "DATE")]
         cutoff: String,
+        /// Which source inventory to audit the target against.
+        #[arg(long, value_enum, default_value = "pst")]
+        source: audit_cmd::SourceKind,
     },
     /// Write a reviewable plan of repair actions.
     Plan,
@@ -144,12 +160,23 @@ fn main() -> ExitCode {
             pst,
             ews,
             credential,
+            outlook_com,
+            client_id,
+            tenant,
         } => report(audit_cmd::inventory(
             &work,
             pst.as_deref(),
             ews.map(|ews| EwsArgs { ews, credential }).as_ref(),
+            client_id
+                .filter(|_| outlook_com)
+                .map(|client_id| audit_cmd::GraphArgs { client_id, tenant })
+                .as_ref(),
         )),
-        Command::Audit { work, cutoff } => report(audit_cmd::audit(&work, &cutoff)),
+        Command::Audit {
+            work,
+            cutoff,
+            source,
+        } => report(audit_cmd::audit(&work, &cutoff, source)),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");
             ExitCode::from(2)

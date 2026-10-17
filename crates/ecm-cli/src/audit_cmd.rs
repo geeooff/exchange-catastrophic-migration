@@ -12,10 +12,39 @@ use ecm_store::{SOURCE_INVENTORY, TARGET_INVENTORY, read_inventory, write_csv, w
 
 use crate::{EwsArgs, connect};
 
-/// Inventories the PST and/or the target into `work`.
-pub fn inventory(work: &Path, pst: Option<&Path>, ews: Option<&EwsArgs>) -> Result<(), String> {
-    if pst.is_none() && ews.is_none() {
-        return Err("nothing to inventory: give --pst, --ews or both".into());
+/// File name of the Outlook.com inventory in a work directory.
+pub const OUTLOOK_INVENTORY: &str = "outlook.jsonl";
+
+/// Which source inventory an audit uses.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum SourceKind {
+    /// The PST inventory (`source.jsonl`).
+    Pst,
+    /// The Outlook.com inventory (`outlook.jsonl`).
+    Outlook,
+}
+
+/// How to sign in to Microsoft Graph.
+#[derive(Debug)]
+pub struct GraphArgs {
+    /// App registration client id.
+    pub client_id: String,
+    /// Sign-in authority.
+    pub tenant: String,
+}
+
+/// Inventories the PST, the target and/or Outlook.com into `work`.
+pub fn inventory(
+    work: &Path,
+    pst: Option<&Path>,
+    ews: Option<&EwsArgs>,
+    graph: Option<&GraphArgs>,
+) -> Result<(), String> {
+    if pst.is_none() && ews.is_none() && graph.is_none() {
+        return Err("nothing to inventory: give --pst, --ews and/or --outlook-com".into());
+    }
+    if let Some(graph) = graph {
+        inventory_graph(work, graph)?;
     }
     if let Some(pst) = pst {
         let before = ecm_pst::sha256_file(pst).map_err(|e| e.to_string())?;
@@ -70,15 +99,64 @@ pub fn inventory(work: &Path, pst: Option<&Path>, ews: Option<&EwsArgs>) -> Resu
     Ok(())
 }
 
+#[cfg(windows)]
+fn inventory_graph(work: &Path, args: &GraphArgs) -> Result<(), String> {
+    let transport = ecm_graph::WinHttpTransport::default();
+    let token =
+        ecm_graph::auth::sign_in(&transport, &args.client_id, &args.tenant, &mut |prompt| {
+            eprintln!();
+            eprintln!(
+                "Sign in to Outlook.com: open {} and enter the code {}",
+                prompt.verification_uri, prompt.user_code
+            );
+            eprintln!("(Waiting for you to sign in…)");
+        })
+        .map_err(|e| e.to_string())?;
+    let client = ecm_graph::GraphClient::new(transport, token);
+    println!(
+        "Signed in as {}.",
+        client.mailbox().map_err(|e| e.to_string())?
+    );
+    let tree = client.mail_folders().map_err(|e| e.to_string())?;
+    let mut items = Vec::new();
+    for folder in tree.flatten().into_iter().skip(1) {
+        if folder.total == 0 {
+            continue;
+        }
+        let found = client
+            .inventory_messages(folder)
+            .map_err(|e| e.to_string())?;
+        eprintln!("  outlook.com {}: {} items", folder.path, found.len());
+        items.extend(found);
+    }
+    let path = work.join(OUTLOOK_INVENTORY);
+    write_inventory(&path, &items).map_err(|e| e.to_string())?;
+    println!(
+        "Outlook.com: {} messages into {}. The mailbox was not changed.",
+        items.len(),
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn inventory_graph(_: &Path, _: &GraphArgs) -> Result<(), String> {
+    Err("Microsoft Graph access needs Windows for now (WinHTTP)".into())
+}
+
 fn display(path: &str) -> &str {
     if path.is_empty() { "(top)" } else { path }
 }
 
 /// Audits the inventories in `work` and writes the reports there.
-pub fn audit(work: &Path, cutoff: &str) -> Result<(), String> {
+pub fn audit(work: &Path, cutoff: &str, kind: SourceKind) -> Result<(), String> {
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
         .ok_or_else(|| format!("invalid --cutoff {cutoff:?}: expected YYYY-MM-DD"))?;
-    let source = read_inventory(&work.join(SOURCE_INVENTORY)).map_err(|e| e.to_string())?;
+    let source_file = match kind {
+        SourceKind::Pst => SOURCE_INVENTORY,
+        SourceKind::Outlook => OUTLOOK_INVENTORY,
+    };
+    let source = read_inventory(&work.join(source_file)).map_err(|e| e.to_string())?;
     let target = read_inventory(&work.join(TARGET_INVENTORY)).map_err(|e| e.to_string())?;
     let audit = ecm_audit::audit(&source, &target, cutoff);
 
