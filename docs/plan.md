@@ -82,9 +82,9 @@ Prefer official Microsoft crates when they exist:
 
 Other candidates, to evaluate:
 
-- `ews` (thunderbird/ews-rs, MPL-2.0): EWS request and response types. If it covers too
-  little (extended properties, `ExportItems`/`UploadItems`), we write our own types
-  with `quick-xml`.
+- `ews` (thunderbird/ews-rs, MPL-2.0) was evaluated and not used: it has no
+  `FindFolder`, `ExportItems` or `UploadItems`. `ecm-ews` writes its SOAP requests by
+  hand and parses responses with `quick-xml`.
 - `mail-parser` / `mail-builder`: MIME parsing and building.
 - `rusqlite`, `clap`, `tracing`, `serde`, `sha2`.
 
