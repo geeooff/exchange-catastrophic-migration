@@ -39,6 +39,8 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   the same script on `windows-latest`.
 - One branch and one PR per milestone. `main` is protected (required check `build`).
   Dependabot merges compatible crate updates on its own.
+- Agents may push branches, open PRs, fix CI failures and enable auto-merge
+  (`gh pr merge --auto --merge`). Never bypass a required check or the ruleset.
 - Commit only when asked. Messages say what and why, ending with the
   `Co-Authored-By` line.
 
