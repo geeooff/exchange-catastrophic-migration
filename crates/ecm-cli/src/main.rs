@@ -22,9 +22,16 @@ enum Command {
     Source(SourceCommand),
     /// Check a target: authenticate, show its folder tree and counts.
     #[command(subcommand)]
-    Target(CheckCommand),
-    /// Export the whole target mailbox before any change.
-    Backup,
+    Target(TargetCommand),
+    /// Export the whole target mailbox before any change. Only reads the mailbox.
+    /// Run it again into the same directory to resume.
+    Backup {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Backup directory, created if needed.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
     /// Read the source and the target into the local database.
     Inventory,
     /// Match items and report what is OK, degraded, missing or duplicated.
@@ -55,9 +62,30 @@ enum SourceCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum CheckCommand {
-    /// Run the check.
-    Check,
+enum TargetCommand {
+    /// Authenticate and show the mailbox's folder tree, counts and sizes. Only
+    /// reads the mailbox.
+    Check {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Show every folder from the mailbox root, system folders included, not
+        /// only those a mail client shows.
+        #[arg(long)]
+        all_folders: bool,
+    },
+}
+
+/// How to reach an Exchange mailbox.
+#[derive(Debug, clap::Args)]
+struct EwsArgs {
+    /// EWS endpoint, e.g. `https://mail.example.com/EWS/Exchange.asmx`
+    #[arg(long, value_name = "URL")]
+    ews: String,
+    /// Generic credential in the Windows Credential Manager holding the mailbox
+    /// user and password. Defaults to `ecm:HOST`, created with
+    /// `cmdkey /generic:ecm:HOST /user:ADDRESS /pass`.
+    #[arg(long, value_name = "NAME")]
+    credential: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -81,11 +109,136 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Target(TargetCommand::Check { ews, all_folders }) => {
+            report(target_check(&ews, all_folders))
+        }
+        Command::Backup { ews, out } => report(backup(&ews, out)),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");
             ExitCode::from(2)
         }
     }
+}
+
+/// Exit code for a command's outcome, printing its error if any.
+fn report(outcome: Result<(), String>) -> ExitCode {
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("ecm: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(windows)]
+fn connect(args: &EwsArgs) -> Result<ecm_ews::EwsClient<ecm_http::HttpClient>, String> {
+    let url = ecm_http::HttpsUrl::parse(&args.ews).map_err(|e| e.to_string())?;
+    let name = args
+        .credential
+        .clone()
+        .unwrap_or_else(|| format!("ecm:{}", url.host));
+    let credential = ecm_http::read_generic_credential(&name).map_err(|e| e.to_string())?;
+    let client = ecm_http::HttpClient::new(url, credential).map_err(|e| e.to_string())?;
+    Ok(ecm_ews::EwsClient::new(client))
+}
+
+#[cfg(not(windows))]
+fn connect(_: &EwsArgs) -> Result<ecm_ews::EwsClient<NoTransport>, String> {
+    Err("Exchange access needs Windows for now (WinHTTP and the Credential Manager)".into())
+}
+
+#[cfg(not(windows))]
+struct NoTransport;
+
+#[cfg(not(windows))]
+impl ecm_ews::Transport for NoTransport {
+    fn post_xml(&self, _: &[u8]) -> ecm_ews::Result<(u16, Vec<u8>)> {
+        unreachable!()
+    }
+    fn user(&self) -> &str {
+        unreachable!()
+    }
+}
+
+fn target_check(args: &EwsArgs, all_folders: bool) -> Result<(), String> {
+    let client = connect(args)?;
+    let root = if all_folders { "root" } else { "msgfolderroot" };
+    let tree = client.folder_tree(root).map_err(|e| e.to_string())?;
+    let summary = tree.summary();
+    println!("Target   {}", args.ews);
+    println!("User     {}", client.user());
+    println!();
+    print_tree(&summary);
+    println!();
+    println!(
+        "{} folders, {} items, {}. Nothing was changed.",
+        summary.folder_count(),
+        summary.total_item_count(),
+        format_size(summary.total_size())
+    );
+    Ok(())
+}
+
+fn backup(args: &EwsArgs, out: PathBuf) -> Result<(), String> {
+    use ecm_ews::backup::{BackupEvent, BackupOptions};
+    use std::io::Write as _;
+
+    let client = connect(args)?;
+    let options = BackupOptions::new(&out);
+    let mut on_event = |event: BackupEvent<'_>| match event {
+        BackupEvent::Started {
+            folders,
+            items,
+            bytes,
+            already_saved,
+        } => {
+            println!(
+                "Backing up {folders} folders, {items} items ({}) into {}",
+                format_size(bytes),
+                out.display()
+            );
+            if already_saved > 0 {
+                println!("{already_saved} items are already saved and will be skipped.");
+            }
+        }
+        BackupEvent::Folder {
+            path,
+            items,
+            already_saved,
+        } => {
+            let name = if path.is_empty() { "(root)" } else { path };
+            eprint!("\r\x1b[K");
+            println!("  {name}: {items} items, {already_saved} already saved");
+        }
+        BackupEvent::Saved { items, bytes } => {
+            eprint!("\r\x1b[K    saved {items} items ({})", format_size(bytes));
+            let _ = std::io::stderr().flush();
+        }
+        BackupEvent::Failed { path, code } => {
+            eprint!("\r\x1b[K");
+            println!("  {path}: an item could not be exported ({code})");
+        }
+    };
+    let report = client
+        .backup(&options, &mut on_event)
+        .map_err(|e| e.to_string())?;
+    eprint!("\r\x1b[K");
+    println!();
+    println!(
+        "{} items saved ({}), {} already saved, {} failed. The mailbox was not changed.",
+        report.saved,
+        format_size(report.saved_bytes),
+        report.already_saved,
+        report.failed
+    );
+    if report.failed > 0 {
+        println!(
+            "Failed items are listed in {}; run the backup again to retry them.",
+            out.join("errors.jsonl").display()
+        );
+    }
+    Ok(())
 }
 
 fn print_source_report(report: &ecm_pst::CheckReport) {
@@ -142,15 +295,16 @@ fn print_tree(tree: &FolderSummary) {
         .max()
         .unwrap_or(0);
     println!(
-        "{:width$}  {:>8}  {:>7}  {:>6}  Class",
-        "Folder", "Items", "Unread", "Assoc."
+        "{:width$}  {:>8}  {:>7}  {:>6}  {:>10}  Class",
+        "Folder", "Items", "Unread", "Assoc.", "Size"
     );
     for (label, folder) in lines {
         println!(
-            "{label:width$}  {:>8}  {:>7}  {:>6}  {}",
+            "{label:width$}  {:>8}  {:>7}  {:>6}  {:>10}  {}",
             folder.item_count,
             folder.unread_count,
             folder.associated_count,
+            folder.size.map_or_else(|| "-".to_owned(), format_size),
             folder.class.as_deref().unwrap_or("-"),
         );
     }
