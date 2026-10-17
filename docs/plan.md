@@ -67,7 +67,7 @@ Cargo workspace:
 | `ecm-pst` | PST source, built on Microsoft's `outlook-pst` |
 | `ecm-ews` | EWS client: SOAP requests, paging, throttling and retries, source and target |
 | `ecm-http` | HTTP transport with NTLM/Negotiate. First implementation: WinHTTP through Microsoft's `windows` crate. Possible portable implementation later (`reqwest` + an SSPI/NTLM crate) |
-| `ecm-store` | Local state in SQLite: inventories, matches, plans, journal |
+| `ecm-store` | Local state as files: inventories (JSON Lines), CSV reports, later plans and journal |
 | `ecm-audit` | Matching, defect detection, reports |
 | `ecm` (binary) | Command-line interface (`clap`) |
 
@@ -86,7 +86,10 @@ Other candidates, to evaluate:
   `FindFolder`, `ExportItems` or `UploadItems`. `ecm-ews` writes its SOAP requests by
   hand and parses responses with `quick-xml`.
 - `mail-parser` / `mail-builder`: MIME parsing and building.
-- `rusqlite`, `clap`, `tracing`, `serde`, `sha2`.
+- `clap`, `serde`/`serde_json`, `sha2`, `base64`.
+- SQLite (`rusqlite`) was planned for local state. JSON Lines files turned out to be
+  enough: about 100,000 records load in memory in well under a second, the files
+  are readable with any tool, and no C dependency is needed.
 
 ### Commands
 
@@ -167,8 +170,8 @@ property.
 | M0 ✅ | Workspace, CI (fmt, clippy, tests), contribution guide | CI is green on an empty skeleton |
 | M1 ✅ | `source check` on PST | Folder tree and item counts match what Outlook shows for a test PST; checksum unchanged after the run |
 | M2 | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
-| M3 | Spike: re-upload fidelity | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
-| M4 | `inventory` + `audit` | HTML/CSV report with classes and defects; tested on synthetic damaged mailboxes |
+| M3 | Spike: re-upload fidelity (needs a disposable test mailbox; M4 comes first since it only reads) | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
+| M4 ✅ | `inventory` + `audit` | CSV report with classes and defects; tested on synthetic damaged mailboxes |
 | M5 | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
 | M6 | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
 | M7 | Exchange (EWS) as a source | Same results as with a PST of the same mailbox |
@@ -187,6 +190,13 @@ property.
 - `outlook_pst::open_store` also opens the file **for writing** when it can. `ecm-pst`
   never calls it: it opens the file itself, read-only and sharing read access only, and
   passes the handle to `UnicodePstFile::read_from`, which has no writer.
+- `outlook-pst` 1.2 refuses messages without a sub-node tree ("Missing Sub-Node Tree
+  on message"), which MS-PST allows and which is common for contacts, appointments and
+  tasks. The inventory falls back to the folder's contents table row for them; a few
+  still fail and are reported. Worth fixing upstream.
+- A PST export can be incomplete. On a real mailbox, about 3,000 sent items existed
+  only as damaged copies on the target. Items with no source match are therefore
+  never quarantined by default: they are reported as `unmatched` for review.
 - How much of the PST format `outlook-pst` exposes: named properties, attachments,
   embedded messages, compressed RTF bodies, recurrence data. To check in M1.
 - EWS limits on hosted Exchange: throttling, maximum request size (large attachments).

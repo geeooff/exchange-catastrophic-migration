@@ -5,6 +5,8 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
+
+mod audit_cmd;
 use ecm_model::FolderSummary;
 
 /// Audit and repair an Exchange mailbox after a botched migration.
@@ -32,10 +34,34 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         out: PathBuf,
     },
-    /// Read the source and the target into the local database.
-    Inventory,
-    /// Match items and report what is OK, degraded, missing or duplicated.
-    Audit,
+    /// Read the source and the target, item by item, into inventory files. Only
+    /// reads both.
+    Inventory {
+        /// Work directory for inventories and reports. It holds mailbox metadata:
+        /// keep it private (e.g. the gitignored `reports/`).
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// PST file to inventory as the source. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: Option<PathBuf>,
+        /// EWS endpoint of the target mailbox to inventory.
+        #[arg(long, value_name = "URL")]
+        ews: Option<String>,
+        /// Credential name for `--ews`, `ecm:HOST` by default.
+        #[arg(long, value_name = "NAME", requires = "ews")]
+        credential: Option<String>,
+    },
+    /// Match the inventories and report what is OK, misplaced, degraded, missing or
+    /// duplicated, as a summary and CSV files in the work directory.
+    Audit {
+        /// Work directory holding the inventories.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// Migration date, `YYYY-MM-DD` (UTC). Target items without a source match
+        /// received from that day on are new mail, kept as they are.
+        #[arg(long, value_name = "DATE")]
+        cutoff: String,
+    },
     /// Write a reviewable plan of repair actions.
     Plan,
     /// Run a reviewed plan, journaled and resumable.
@@ -113,6 +139,17 @@ fn main() -> ExitCode {
             report(target_check(&ews, all_folders))
         }
         Command::Backup { ews, out } => report(backup(&ews, out)),
+        Command::Inventory {
+            work,
+            pst,
+            ews,
+            credential,
+        } => report(audit_cmd::inventory(
+            &work,
+            pst.as_deref(),
+            ews.map(|ews| EwsArgs { ews, credential }).as_ref(),
+        )),
+        Command::Audit { work, cutoff } => report(audit_cmd::audit(&work, &cutoff)),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");
             ExitCode::from(2)

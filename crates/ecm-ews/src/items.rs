@@ -2,7 +2,12 @@
 
 use base64::Engine as _;
 
-use crate::{Error, EwsClient, Result, Transport, xml::escape};
+use ecm_model::{ItemRecord, item::parse_utc};
+
+use crate::{
+    Error, EwsClient, Result, Transport,
+    xml::{Element, escape},
+};
 
 /// Items returned per `FindItem` page.
 const PAGE_SIZE: usize = 1000;
@@ -84,6 +89,42 @@ impl<T: Transport> EwsClient<T> {
         }
     }
 
+    /// Every normal item of a folder with the properties an audit needs, oldest
+    /// first, page by page. `folder` is the folder's path, copied into each record.
+    pub fn inventory_items(&self, folder_id: &str, folder: &str) -> Result<Vec<ItemRecord>> {
+        let mut items = Vec::new();
+        loop {
+            let body = format!(
+                r#"<m:FindItem Traversal="Shallow"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>{INVENTORY_PROPERTIES}</t:AdditionalProperties></m:ItemShape><m:IndexedPageItemView MaxEntriesReturned="{PAGE_SIZE}" Offset="{}" BasePoint="Beginning"/><m:SortOrder><t:FieldOrder Order="Ascending"><t:FieldURI FieldURI="item:DateTimeCreated"/></t:FieldOrder></m:SortOrder><m:ParentFolderIds><t:FolderId Id="{}"/></m:ParentFolderIds></m:FindItem>"#,
+                items.len(),
+                escape(folder_id)
+            );
+            let message = self
+                .call(&body)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| Error::MalformedResponse("FindItem returned no message".into()))?
+                .into_result()?;
+            let root = message
+                .element
+                .child("RootFolder")
+                .ok_or_else(|| Error::MalformedResponse("FindItem without RootFolder".into()))?;
+            let page = root
+                .child("Items")
+                .map(|list| list.children.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(|item| inventory_record(item, folder))
+                .collect::<Result<Vec<_>>>()?;
+            let last = root.attribute("IncludesLastItemInRange") != Some("false");
+            let empty = page.is_empty();
+            items.extend(page);
+            if last || empty {
+                return Ok(items);
+            }
+        }
+    }
+
     /// Exports items with `ExportItems`, one result per id, in the same order.
     /// Exporting does not change the items, not even their read state.
     pub fn export_items(&self, ids: &[&str]) -> Result<Vec<Export>> {
@@ -121,6 +162,86 @@ impl<T: Transport> EwsClient<T> {
             })
             .collect()
     }
+}
+
+/// Properties `inventory_items` asks for. `PR_TRANSPORT_MESSAGE_HEADERS` comes back
+/// truncated by `FindItem`, which is enough to tell whether it is there.
+const INVENTORY_PROPERTIES: &str = concat!(
+    r#"<t:FieldURI FieldURI="item:ItemClass"/>"#,
+    r#"<t:FieldURI FieldURI="item:Subject"/>"#,
+    r#"<t:FieldURI FieldURI="item:DateTimeReceived"/>"#,
+    r#"<t:FieldURI FieldURI="item:DateTimeSent"/>"#,
+    r#"<t:FieldURI FieldURI="item:DateTimeCreated"/>"#,
+    r#"<t:FieldURI FieldURI="item:Size"/>"#,
+    r#"<t:FieldURI FieldURI="item:HasAttachments"/>"#,
+    r#"<t:FieldURI FieldURI="message:InternetMessageId"/>"#,
+    r#"<t:FieldURI FieldURI="message:From"/>"#,
+    r#"<t:FieldURI FieldURI="message:IsRead"/>"#,
+    r#"<t:ExtendedFieldURI PropertyTag="0x007D" PropertyType="String"/>"#,
+    r#"<t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/>"#,
+);
+
+fn inventory_record(item: &Element, folder: &str) -> Result<ItemRecord> {
+    let key = item
+        .child("ItemId")
+        .and_then(|id| id.attribute("Id"))
+        .ok_or_else(|| Error::MalformedResponse(format!("{} without ItemId", item.name)))?;
+    let text = |name| {
+        item.child_text(name)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let flag = |name| text(name).map(|value| value.eq_ignore_ascii_case("true"));
+    let mut has_headers = false;
+    let mut native_body = None;
+    for property in item.children_named("ExtendedProperty") {
+        let tag = property
+            .child("ExtendedFieldURI")
+            .and_then(|uri| uri.attribute("PropertyTag"))
+            .map(|tag| {
+                tag.trim_start_matches("0x")
+                    .trim_start_matches("0X")
+                    .to_ascii_lowercase()
+            });
+        let value = property.child_text("Value").unwrap_or_default().trim();
+        match tag.as_deref().map(|t| t.trim_start_matches('0')) {
+            Some("7d") => has_headers = !value.is_empty(),
+            Some("1016") => native_body = value.parse().ok(),
+            _ => {}
+        }
+    }
+    let sender = item.path(&["From", "Mailbox"]).and_then(|mailbox| {
+        mailbox
+            .child_text("EmailAddress")
+            .map(str::trim)
+            .filter(|address| address.contains('@'))
+            .map(str::to_lowercase)
+            .or_else(|| {
+                mailbox
+                    .child_text("Name")
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            })
+    });
+    let is_message = item.name == "Message" || item.name.starts_with("Meeting");
+    Ok(ItemRecord {
+        key: key.to_owned(),
+        folder: folder.to_owned(),
+        class: text("ItemClass").unwrap_or_default(),
+        message_id: text("InternetMessageId"),
+        subject: text("Subject"),
+        sender,
+        sent: text("DateTimeSent").and_then(|t| parse_utc(&t)),
+        received: text("DateTimeReceived").and_then(|t| parse_utc(&t)),
+        created: text("DateTimeCreated").and_then(|t| parse_utc(&t)),
+        size: text("Size").and_then(|size| size.parse().ok()),
+        has_attachments: flag("HasAttachments"),
+        read: flag("IsRead"),
+        has_headers: is_message.then_some(has_headers),
+        native_body,
+    })
 }
 
 #[cfg(test)]
@@ -169,6 +290,32 @@ mod tests {
             })
         );
         assert!(fake.requests.borrow()[1].contains(r#"Offset="2""#));
+    }
+
+    #[test]
+    fn inventories_damaged_and_healthy_messages() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true"><t:Items><t:Message><t:ItemId Id="OK"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Order shipped</t:Subject><t:DateTimeReceived>2024-12-30T03:19:13Z</t:DateTimeReceived><t:Size>236262</t:Size><t:DateTimeSent>2024-12-30T03:19:09Z</t:DateTimeSent><t:DateTimeCreated>2026-09-01T00:07:02Z</t:DateTimeCreated><t:HasAttachments>false</t:HasAttachments><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x7d" PropertyType="String"/><t:Value>Received: from mx</t:Value></t:ExtendedProperty><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/><t:Value>3</t:Value></t:ExtendedProperty><t:InternetMessageId>&lt;a@example.test&gt;</t:InternetMessageId><t:From><t:Mailbox><t:Name>Shop</t:Name><t:EmailAddress>Orders@Example.TEST</t:EmailAddress></t:Mailbox></t:From><t:IsRead>true</t:IsRead></t:Message><t:Message><t:ItemId Id="BROKEN"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Photos</t:Subject><t:DateTimeReceived>2026-09-01T05:02:38Z</t:DateTimeReceived><t:DateTimeSent>2021-10-23T21:31:00Z</t:DateTimeSent><t:InternetMessageId>&lt;b@example.test&gt;</t:InternetMessageId><t:IsRead>false</t:IsRead></t:Message></t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#,
+            ),
+        )]);
+        let items = EwsClient::new(&fake).inventory_items("F", "").unwrap();
+        let (ok, broken) = (&items[0], &items[1]);
+        assert_eq!(ok.message_id.as_deref(), Some("<a@example.test>"));
+        assert_eq!(ok.sender.as_deref(), Some("orders@example.test"));
+        assert_eq!(
+            (ok.has_headers, ok.native_body, ok.read),
+            (Some(true), Some(3), Some(true))
+        );
+        assert_eq!(
+            ok.received,
+            ecm_model::item::parse_utc("2024-12-30T03:19:13Z")
+        );
+        assert_eq!(broken.sender, None);
+        assert_eq!(broken.has_headers, Some(false));
+        assert_eq!(broken.read, Some(false));
+        assert!(fake.requests.borrow()[0].contains(r#"PropertyTag="0x007D""#));
     }
 
     #[test]

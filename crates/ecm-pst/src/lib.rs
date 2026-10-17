@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     fmt,
     fs::{File, OpenOptions},
     io::{self, BufReader, Read},
@@ -18,10 +19,13 @@ use std::{
     rc::Rc,
 };
 
-use ecm_model::FolderSummary;
+use ecm_model::{FolderSummary, ItemRecord, item::filetime_to_unix};
 use outlook_pst::{
     AnsiPstFile, UnicodePstFile,
-    ltp::prop_context::PropertyValue,
+    ltp::{
+        prop_context::PropertyValue,
+        table_context::{TableContext, TableRowData},
+    },
     messaging::{
         folder::Folder,
         store::{AnsiStore, EntryId, Store, UnicodeStore},
@@ -282,6 +286,197 @@ impl PstSource {
             path: self.path.clone(),
             source,
         }
+    }
+
+    /// Every item of the IPM subtree, folder by folder, with the properties an
+    /// audit needs. Folder paths start below the IPM subtree (`""` is the subtree
+    /// itself). A message that cannot be read is reported in the second list and
+    /// skipped; `on_folder` is called with each folder's path and item count.
+    pub fn items(
+        &self,
+        on_folder: &mut dyn FnMut(&str, usize),
+    ) -> Result<(Vec<ItemRecord>, Vec<String>)> {
+        let entry_id = self
+            .store
+            .properties()
+            .ipm_sub_tree_entry_id()
+            .map_err(|source| self.format_error(source))?;
+        let mut items = Vec::new();
+        let mut errors = Vec::new();
+        self.collect_items(&entry_id, String::new(), &mut items, &mut errors, on_folder)?;
+        Ok((items, errors))
+    }
+
+    fn collect_items(
+        &self,
+        entry_id: &EntryId,
+        path: String,
+        items: &mut Vec<ItemRecord>,
+        errors: &mut Vec<String>,
+        on_folder: &mut dyn FnMut(&str, usize),
+    ) -> Result<()> {
+        let folder = self
+            .store
+            .open_folder(entry_id)
+            .map_err(|source| self.format_error(source))?;
+
+        if let Some(contents) = folder.contents_table() {
+            let before = items.len();
+            for row in contents.rows_matrix() {
+                let node = NodeId::from(u32::from(row.id()));
+                let key = format!("{:08x}", u32::from(node));
+                let message = self
+                    .store
+                    .properties()
+                    .make_entry_id(node)
+                    .and_then(|id| self.store.open_message(&id, Some(&ITEM_PROPERTIES)));
+                let properties = match message {
+                    Ok(message) => Ok(message
+                        .properties()
+                        .iter()
+                        .map(|(id, value)| (*id, value.clone()))
+                        .collect()),
+                    // outlook-pst refuses messages without a sub-node tree, which
+                    // MS-PST allows (no recipient or attachment sub-nodes): many
+                    // contacts and appointments. The folder's contents table holds
+                    // their main properties, so the record is built from it.
+                    Err(error) => row_properties(contents.as_ref(), row).map_err(|_| error),
+                };
+                match properties {
+                    Ok(properties) => items.push(item_record(key, &path, &properties)),
+                    Err(error) => errors.push(format!("{path}: message {key}: {error}")),
+                }
+            }
+            on_folder(&path, items.len() - before);
+        }
+
+        let mut children = Vec::new();
+        if let Some(hierarchy) = folder.hierarchy_table() {
+            for row in hierarchy.rows_matrix() {
+                let node = NodeId::from(u32::from(row.id()));
+                let entry_id = self
+                    .store
+                    .properties()
+                    .make_entry_id(node)
+                    .map_err(|source| self.format_error(source))?;
+                let name = self
+                    .store
+                    .open_folder(&entry_id)
+                    .map_err(|source| self.format_error(source))?
+                    .properties()
+                    .display_name()
+                    .unwrap_or_default();
+                children.push((name, entry_id));
+            }
+        }
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, entry_id) in children {
+            let child_path = if path.is_empty() {
+                name
+            } else {
+                format!("{path}/{name}")
+            };
+            self.collect_items(&entry_id, child_path, items, errors, on_folder)?;
+        }
+        Ok(())
+    }
+}
+
+const PR_MESSAGE_CLASS: u16 = 0x001A;
+const PR_SUBJECT: u16 = 0x0037;
+const PR_CLIENT_SUBMIT_TIME: u16 = 0x0039;
+const PR_TRANSPORT_MESSAGE_HEADERS: u16 = 0x007D;
+const PR_SENDER_NAME: u16 = 0x0C1A;
+const PR_SENDER_EMAIL_ADDRESS: u16 = 0x0C1F;
+const PR_MESSAGE_DELIVERY_TIME: u16 = 0x0E06;
+const PR_MESSAGE_FLAGS: u16 = 0x0E07;
+const PR_MESSAGE_SIZE: u16 = 0x0E08;
+const PR_HASATTACH: u16 = 0x0E1B;
+const PR_INTERNET_MESSAGE_ID: u16 = 0x1035;
+const PR_NATIVE_BODY_INFO: u16 = 0x1016;
+const PR_CREATION_TIME: u16 = 0x3007;
+const PR_SENDER_SMTP_ADDRESS: u16 = 0x5D01;
+/// `MSGFLAG_READ`.
+const MSGFLAG_READ: i32 = 0x1;
+
+/// The properties [`PstSource::items`] loads from each message, and no others.
+const ITEM_PROPERTIES: [u16; 14] = [
+    PR_MESSAGE_CLASS,
+    PR_SUBJECT,
+    PR_CLIENT_SUBMIT_TIME,
+    PR_TRANSPORT_MESSAGE_HEADERS,
+    PR_SENDER_NAME,
+    PR_SENDER_EMAIL_ADDRESS,
+    PR_MESSAGE_DELIVERY_TIME,
+    PR_MESSAGE_FLAGS,
+    PR_MESSAGE_SIZE,
+    PR_HASATTACH,
+    PR_INTERNET_MESSAGE_ID,
+    PR_NATIVE_BODY_INFO,
+    PR_CREATION_TIME,
+    PR_SENDER_SMTP_ADDRESS,
+];
+
+/// Every column of a contents table row, as properties.
+fn row_properties(
+    table: &dyn TableContext,
+    row: &TableRowData,
+) -> io::Result<BTreeMap<u16, PropertyValue>> {
+    let context = table.context();
+    let mut properties = BTreeMap::new();
+    for (column, value) in context.columns().iter().zip(row.columns(context)?) {
+        if let Some(value) = value {
+            properties.insert(
+                column.prop_id(),
+                table.read_column(&value, column.prop_type())?,
+            );
+        }
+    }
+    Ok(properties)
+}
+
+fn item_record(key: String, folder: &str, properties: &BTreeMap<u16, PropertyValue>) -> ItemRecord {
+    let text = |id| {
+        match properties.get(&id) {
+            Some(PropertyValue::Unicode(value)) => Some(value.to_string()),
+            Some(PropertyValue::String8(value)) => Some(value.to_string()),
+            _ => None,
+        }
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    };
+    let time = |id| match properties.get(&id) {
+        Some(PropertyValue::Time(value)) => Some(filetime_to_unix(*value)),
+        _ => None,
+    };
+    let integer = |id| match properties.get(&id) {
+        Some(PropertyValue::Integer32(value)) => Some(i64::from(*value)),
+        Some(PropertyValue::Integer64(value)) => Some(*value),
+        _ => None,
+    };
+    let sender = text(PR_SENDER_SMTP_ADDRESS)
+        .or_else(|| text(PR_SENDER_EMAIL_ADDRESS).filter(|address| address.contains('@')))
+        .map(|address| address.to_lowercase())
+        .or_else(|| text(PR_SENDER_NAME));
+
+    ItemRecord {
+        key,
+        folder: folder.to_owned(),
+        class: text(PR_MESSAGE_CLASS).unwrap_or_default(),
+        message_id: text(PR_INTERNET_MESSAGE_ID),
+        subject: text(PR_SUBJECT),
+        sender,
+        sent: time(PR_CLIENT_SUBMIT_TIME),
+        received: time(PR_MESSAGE_DELIVERY_TIME),
+        created: time(PR_CREATION_TIME),
+        size: integer(PR_MESSAGE_SIZE).and_then(|n| u64::try_from(n).ok()),
+        has_attachments: match properties.get(&PR_HASATTACH) {
+            Some(PropertyValue::Boolean(value)) => Some(*value),
+            _ => None,
+        },
+        read: integer(PR_MESSAGE_FLAGS).map(|flags| flags & i64::from(MSGFLAG_READ) != 0),
+        has_headers: Some(text(PR_TRANSPORT_MESSAGE_HEADERS).is_some()),
+        native_body: integer(PR_NATIVE_BODY_INFO).and_then(|n| u8::try_from(n).ok()),
     }
 }
 

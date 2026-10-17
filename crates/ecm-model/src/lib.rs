@@ -4,6 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod item;
+
+pub use item::ItemRecord;
+
 /// A folder and its sub-folders, with the counts a source or a target reports.
 ///
 /// The same shape is produced from a PST file and from an Exchange mailbox, so the
