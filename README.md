@@ -16,6 +16,8 @@ arrived after the migration.
 >   over EWS (NTLM/Negotiate, Windows only).
 > - `ecm backup --ews <url> --out <dir>`: a resumable full-fidelity export
 >   (`ExportItems`) of the mailbox.
+> - `ecm inventory` and `ecm audit`: match a PST with a mailbox item by item and report
+>   what is ok, misplaced, damaged, missing, duplicated, new or unmatched (CSV).
 >
 > See [docs/plan.md](docs/plan.md).
 

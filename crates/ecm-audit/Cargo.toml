@@ -10,7 +10,6 @@ publish.workspace = true
 
 [dependencies]
 ecm-model.workspace = true
-ecm-store.workspace = true
 
 [lints]
 workspace = true
