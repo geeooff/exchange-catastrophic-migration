@@ -8,9 +8,16 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: early development.** Only `ecm source check --pst <file>` works so far: it
-> opens a PST read-only, prints its folder tree with item counts, and proves the file
-> was not modified. See [docs/plan.md](docs/plan.md).
+> **Status: early development.** What works so far, all of it read-only:
+>
+> - `ecm source check --pst <file>`: a PST's folder tree and counts, with proof the
+>   file was not modified.
+> - `ecm target check --ews <url>`: an Exchange mailbox's folder tree, counts and sizes
+>   over EWS (NTLM/Negotiate, Windows only).
+> - `ecm backup --ews <url> --out <dir>`: a resumable full-fidelity export
+>   (`ExportItems`) of the mailbox.
+>
+> See [docs/plan.md](docs/plan.md).
 
 ## What it will do
 

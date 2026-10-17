@@ -34,6 +34,8 @@ use sha2::{Digest, Sha256};
 const PR_CONTAINER_CLASS: u16 = 0x3613;
 /// `PR_ASSOC_CONTENT_COUNT`.
 const PR_ASSOC_CONTENT_COUNT: u16 = 0x3617;
+/// `PR_MESSAGE_SIZE_EXTENDED`.
+const PR_MESSAGE_SIZE_EXTENDED: u16 = 0x0E08;
 
 /// Errors from reading a PST file.
 #[derive(Debug, thiserror::Error)]
@@ -265,6 +267,11 @@ impl PstSource {
             associated_count: match properties.get(PR_ASSOC_CONTENT_COUNT) {
                 Some(PropertyValue::Integer32(n)) => u64::try_from(*n).unwrap_or(0),
                 _ => 0,
+            },
+            size: match properties.get(PR_MESSAGE_SIZE_EXTENDED) {
+                Some(PropertyValue::Integer64(n)) => u64::try_from(*n).ok(),
+                Some(PropertyValue::Integer32(n)) => u64::try_from(*n).ok(),
+                _ => None,
             },
             children,
         })

@@ -14,8 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+ecm-ews.workspace = true
 ecm-model.workspace = true
 ecm-pst.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+ecm-http.workspace = true
 
 [lints]
 workspace = true

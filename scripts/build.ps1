@@ -81,8 +81,10 @@ function Invoke-Tests {
         $anchorsOf[$path]
     }
     $broken = @()
-    # private\ is never published, so it is not checked.
-    $pages = @((Join-Path $root 'README.md'), (Join-Path $root 'CONTRIBUTING.md')) +
+    # *.local.md files are never published, so they are not checked.
+    $pages = @('README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md' | ForEach-Object { Join-Path $root $_ }) +
+             (Get-ChildItem (Join-Path $root '.claude\skills') -Recurse -Filter 'SKILL.md' -ErrorAction SilentlyContinue |
+                  ForEach-Object { $_.FullName }) +
              (Get-ChildItem (Join-Path $root 'docs') -Recurse -Filter '*.md' |
                   ForEach-Object { $_.FullName })
     foreach ($page in $pages) {
@@ -122,7 +124,7 @@ function Invoke-Tests {
         $readme = Join-Path $root ($file -replace '[^/]+$', 'README.md')
         (Test-Path $readme) -and (Select-String -Path $readme -Pattern "``$($Matches[1])``" -SimpleMatch -Quiet)
     }
-    $data = @($tracked | Where-Object { ($_ -match '\.(pst|ost|msg|eml|ics|vcf|sqlite3?|db)$' -and -not (Test-Fixture $_)) -or $_ -match '^(private|reports|backups)/' })
+    $data = @($tracked | Where-Object { ($_ -match '\.(pst|ost|msg|eml|ics|vcf|sqlite3?|db)$' -and -not (Test-Fixture $_)) -or $_ -match '^(private|reports|backups)/' -or $_ -match '\.local(\.[^/]+)?$' })
     if ($data) {
         $data | ForEach-Object { Write-Host "    tracked: $_" -ForegroundColor Red }
         Fail "mailbox data or private notes are tracked by git"

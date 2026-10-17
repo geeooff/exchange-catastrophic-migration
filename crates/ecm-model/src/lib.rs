@@ -22,6 +22,9 @@ pub struct FolderSummary {
     /// Number of hidden, associated items such as views and rules
     /// (`PR_ASSOC_CONTENT_COUNT`).
     pub associated_count: u64,
+    /// Total size of the folder's items in bytes (`PR_MESSAGE_SIZE_EXTENDED`), when
+    /// the source reports it.
+    pub size: Option<u64>,
     /// Sub-folders, sorted by name.
     pub children: Vec<FolderSummary>,
 }
@@ -43,6 +46,16 @@ impl FolderSummary {
                 .children
                 .iter()
                 .map(FolderSummary::total_item_count)
+                .sum::<u64>()
+    }
+
+    /// Total size of the items in this tree, counting only folders that report one.
+    pub fn total_size(&self) -> u64 {
+        self.size.unwrap_or(0)
+            + self
+                .children
+                .iter()
+                .map(FolderSummary::total_size)
                 .sum::<u64>()
     }
 
