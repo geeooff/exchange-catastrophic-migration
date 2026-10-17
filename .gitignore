@@ -1,0 +1,29 @@
+# Rust build output
+/target/
+
+# Personal, never published: migration notes, reports, local config
+/private/
+/reports/
+/backups/
+*.local.toml
+.env
+
+# Mailbox data must never be committed
+*.pst
+*.ost
+*.msg
+*.eml
+*.ics
+*.vcf
+
+# Local state databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
