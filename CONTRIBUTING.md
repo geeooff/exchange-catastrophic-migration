@@ -5,16 +5,15 @@ Thanks for your interest. The project is at an early stage: read
 
 ## Build and test
 
-You need a stable Rust toolchain (minimum supported version: 1.85).
+You need [rustup](https://rustup.rs): `rust-toolchain.toml` selects the stable toolchain
+with rustfmt and clippy. Before committing, run the same checklist as CI:
 
 ```
-cargo build
-cargo test --workspace
-cargo fmt --all
-cargo clippy --workspace --all-targets
+.\scripts\build.ps1            # fmt, clippy, rustdoc, tests, doc links, no mailbox data tracked
+.\scripts\build.ps1 build      # the same, then a release build
 ```
 
-CI runs the same checks on Windows and Linux and treats warnings as errors.
+Warnings are errors, in clippy and in rustdoc.
 
 ## Layout
 

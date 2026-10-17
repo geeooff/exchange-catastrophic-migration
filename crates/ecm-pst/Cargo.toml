@@ -3,7 +3,6 @@ name = "ecm-pst"
 description = "Read-only PST source, built on Microsoft's outlook-pst crate."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
