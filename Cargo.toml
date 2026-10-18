@@ -13,6 +13,7 @@ publish = false
 [workspace.dependencies]
 ecm-audit = { path = "crates/ecm-audit" }
 ecm-ews = { path = "crates/ecm-ews" }
+ecm-graph = { path = "crates/ecm-graph" }
 ecm-http = { path = "crates/ecm-http" }
 ecm-model = { path = "crates/ecm-model" }
 ecm-pst = { path = "crates/ecm-pst" }

@@ -55,18 +55,30 @@ fn windows_error(call: &'static str) -> impl Fn(windows::core::Error) -> Error {
     }
 }
 
-/// An HTTPS client for one server, authenticating with a [`Credential`].
+/// An HTTPS client for one server, answering NTLM/Negotiate challenges with a
+/// [`Credential`] when it has one.
 pub struct HttpClient {
     // Field order matters: the connection is closed before its session.
     connection: Handle,
     _session: Handle,
-    credential: Credential,
+    credential: Option<Credential>,
     url: HttpsUrl,
 }
 
 impl HttpClient {
     /// Opens a session and a connection to the server of `url`.
     pub fn new(url: HttpsUrl, credential: Credential) -> Result<Self> {
+        Self::open(url, Some(credential))
+    }
+
+    /// Opens a session and a connection to the server of `url`, without a
+    /// credential: for servers authenticated by headers, such as OAuth bearer
+    /// tokens.
+    pub fn anonymous(url: HttpsUrl) -> Result<Self> {
+        Self::open(url, None)
+    }
+
+    fn open(url: HttpsUrl, credential: Option<Credential>) -> Result<Self> {
         // SAFETY: the agent string outlives the call; null proxy names are allowed
         // with the automatic proxy access type.
         let session = Handle::new(
@@ -98,9 +110,9 @@ impl HttpClient {
         })
     }
 
-    /// The user name requests authenticate as.
+    /// The user name requests authenticate as, empty without a credential.
     pub fn user(&self) -> &str {
-        self.credential.user()
+        self.credential.as_ref().map_or("", Credential::user)
     }
 
     /// The URL requests are sent to.
@@ -111,6 +123,33 @@ impl HttpClient {
     /// Sends a POST request to the client's URL and returns the response, whatever
     /// its status, except a 401 that persists once the credential was offered.
     pub fn post(&self, content_type: &str, body: &[u8]) -> Result<Response> {
+        self.request(
+            "POST",
+            &self.url.path,
+            &[("Content-Type", content_type)],
+            body,
+        )
+    }
+
+    /// Sends a request to `path` (path and query) on the client's server and
+    /// returns the response, whatever its status, except a 401 that persists once
+    /// the credential was offered. Header values must not contain line breaks.
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<Response> {
+        if headers
+            .iter()
+            .any(|(name, value)| name.contains(['\r', '\n']) || value.contains(['\r', '\n']))
+        {
+            return Err(Error::Windows {
+                call: "WinHttpAddRequestHeaders",
+                source: std::io::Error::other("line break in a header"),
+            });
+        }
         let length = u32::try_from(body.len()).map_err(|_| Error::Windows {
             call: "WinHttpSendRequest",
             source: std::io::Error::other("request body larger than 4 GB"),
@@ -121,8 +160,8 @@ impl HttpClient {
             unsafe {
                 WinHttpOpenRequest(
                     self.connection.0,
-                    &HSTRING::from("POST"),
-                    &HSTRING::from(self.url.path.as_str()),
+                    &HSTRING::from(method),
+                    &HSTRING::from(path),
                     PCWSTR::null(),
                     PCWSTR::null(),
                     std::ptr::null(),
@@ -131,12 +170,17 @@ impl HttpClient {
             },
             "WinHttpOpenRequest",
         )?;
-        let headers: Vec<u16> = format!("Content-Type: {content_type}\r\n")
-            .encode_utf16()
-            .collect();
-        // SAFETY: `request` is valid and `headers` outlives the call.
-        unsafe { WinHttpAddRequestHeaders(request.0, &headers, WINHTTP_ADDREQ_FLAG_ADD) }
-            .map_err(windows_error("WinHttpAddRequestHeaders"))?;
+        if !headers.is_empty() {
+            let headers: Vec<u16> = headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect::<String>()
+                .encode_utf16()
+                .collect();
+            // SAFETY: `request` is valid and `headers` outlives the call.
+            unsafe { WinHttpAddRequestHeaders(request.0, &headers, WINHTTP_ADDREQ_FLAG_ADD) }
+                .map_err(windows_error("WinHttpAddRequestHeaders"))?;
+        }
 
         let mut offered_credential = false;
         loop {
@@ -158,7 +202,7 @@ impl HttpClient {
                 .map_err(windows_error("WinHttpReceiveResponse"))?;
 
             let status = status_code(&request)?;
-            if status != 401 {
+            if status != 401 || self.credential.is_none() {
                 return Ok(Response {
                     status,
                     body: read_body(&request)?,
@@ -166,7 +210,7 @@ impl HttpClient {
             }
             if offered_credential {
                 return Err(Error::Unauthorized {
-                    user: self.credential.user().to_owned(),
+                    user: self.user().to_owned(),
                 });
             }
             // The challenge body is discarded before the request is sent again.
@@ -178,6 +222,9 @@ impl HttpClient {
 
     /// Answers a 401 challenge: NTLM when the server offers it, else Negotiate.
     fn offer_credential(&self, request: &Handle) -> Result<()> {
+        let Some(credential) = &self.credential else {
+            return Ok(());
+        };
         let (mut supported, mut first, mut target) = (0u32, 0u32, 0u32);
         // SAFETY: `request` holds a 401 response and the three outputs are valid.
         unsafe { WinHttpQueryAuthSchemes(request.0, &mut supported, &mut first, &mut target) }
@@ -188,10 +235,10 @@ impl HttpClient {
             WINHTTP_AUTH_SCHEME_NEGOTIATE.0
         } else {
             return Err(Error::Unauthorized {
-                user: self.credential.user().to_owned(),
+                user: credential.user().to_owned(),
             });
         };
-        let mut password = self.credential.password_utf16().to_vec();
+        let mut password = credential.password_utf16().to_vec();
         password.push(0);
         // SAFETY: `request` is valid; both strings are NUL-terminated and outlive
         // the call, which copies them.
@@ -200,7 +247,7 @@ impl HttpClient {
                 request.0,
                 WINHTTP_AUTH_TARGET_SERVER,
                 scheme,
-                &HSTRING::from(self.credential.user()),
+                &HSTRING::from(credential.user()),
                 PCWSTR(password.as_ptr()),
                 std::ptr::null_mut(),
             )

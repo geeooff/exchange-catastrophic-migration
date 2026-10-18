@@ -1,0 +1,20 @@
+[package]
+name = "ecm-graph"
+description = "Read-only Microsoft Graph source: Outlook.com and Microsoft 365 mailboxes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+ecm-model.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+ecm-http.workspace = true
+
+[lints]
+workspace = true
