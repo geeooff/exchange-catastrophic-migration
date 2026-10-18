@@ -72,6 +72,21 @@ pub enum Action {
         /// Subject, for reports.
         subject: Option<String>,
     },
+    /// Re-create an item from MIME carried by the plan (rebuilt from a PST).
+    RecreateMime {
+        /// Target folder path.
+        to: String,
+        /// Subject, for reports.
+        subject: Option<String>,
+        /// Read state to restore.
+        read: Option<bool>,
+        /// Send time to restore (Unix seconds).
+        sent: Option<i64>,
+        /// Receive time to restore (Unix seconds).
+        received: Option<i64>,
+        /// The message, as base64 MIME.
+        mime: String,
+    },
     /// Move a target item to a folder.
     Move {
         /// Target item id.
@@ -112,7 +127,7 @@ impl Action {
     pub fn kind(&self) -> &'static str {
         match self {
             Action::CreateFolder { .. } => "create-folder",
-            Action::Recreate { .. } => "recreate",
+            Action::Recreate { .. } | Action::RecreateMime { .. } => "recreate",
             Action::Move { reason, .. } => match reason.as_str() {
                 "misplaced" => "move",
                 _ => "quarantine",

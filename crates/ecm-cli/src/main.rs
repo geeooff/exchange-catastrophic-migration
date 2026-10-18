@@ -10,6 +10,7 @@ mod audit_cmd;
 mod fidelity_cmd;
 mod pim_cmd;
 mod plan_cmd;
+mod pst_plan_cmd;
 mod verify_cmd;
 use ecm_model::FolderSummary;
 
@@ -158,6 +159,30 @@ enum Command {
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
+    },
+    /// Write a plan that re-creates, from a PST, the messages the target has no
+    /// healthy live copy of, rebuilt as MIME with their original headers. Uses
+    /// the PST inventory (`source.jsonl`) and the target's `target.after.jsonl`.
+    /// Only reads.
+    PlanPst {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the inventories.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// PST file. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
+        /// First day real mail reached the target, `YYYY-MM-DD` (UTC).
+        #[arg(long, value_name = "DATE")]
+        cutoff: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+        /// An applied plan: the messages it re-created without their Message-ID
+        /// are replaced by the PST's copy. Repeat for several plans.
+        #[arg(long, value_name = "PLAN")]
+        after: Vec<PathBuf>,
     },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
@@ -392,6 +417,16 @@ fn main() -> ExitCode {
             &ews,
             &audit_cmd::GraphArgs { client_id, tenant },
             &out,
+        )),
+        Command::PlanPst {
+            ews,
+            work,
+            pst,
+            cutoff,
+            out,
+            after,
+        } => report(pst_plan_cmd::plan_pst_command(
+            &ews, &work, &pst, &cutoff, &after, &out,
         )),
         Command::Verify {
             ews,

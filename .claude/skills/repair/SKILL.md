@@ -28,3 +28,4 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
    start and subject). Apply it like any plan; no Graph sign-in is needed then.
    `ecm target pim` lists the target calendar to check times.
 9. Contact photos: `ecm plan-contact-photos --ews <url> --client-id <id> --out reports/plan-photos.jsonl`, then apply. It matches contacts by e-mail, then name, and skips those that already have a photo.
+10. Messages only the PST still has: `ecm plan-pst --ews <url> --work reports --pst <file> --cutoff <date> --after <applied plans…> --out reports/plan-pst.jsonl` rebuilds them as MIME (original headers, bodies, attachments, S/MIME signed entities) and replaces copies earlier plans made without Message-ID. Refresh `target.after.jsonl` with `ecm verify` first.

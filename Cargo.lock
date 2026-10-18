@@ -237,6 +237,7 @@ dependencies = [
 name = "ecm-pst"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "ecm-model",
  "outlook-pst",
  "sha2",

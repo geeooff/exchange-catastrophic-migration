@@ -10,6 +10,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod content;
+
 use std::{
     collections::BTreeMap,
     fmt,
@@ -146,6 +148,8 @@ pub struct PstSource {
     path: PathBuf,
     format: PstFormat,
     store: Rc<dyn Store>,
+    /// The same store, typed, to open attachments (Unicode PSTs only).
+    unicode: Option<Rc<UnicodeStore>>,
 }
 
 impl fmt::Debug for PstSource {
@@ -174,11 +178,13 @@ impl PstSource {
         // them apart, and `read_from` refuses the one it does not handle. A fresh
         // handle for each attempt, since a failed attempt consumes its reader.
         let unicode = UnicodePstFile::read_from(Box::new(open_read_only(&path).map_err(io_error)?));
+        let mut typed = None;
         let (format, store): (PstFormat, Rc<dyn Store>) = match unicode {
-            Ok(pst) => (
-                PstFormat::Unicode,
-                UnicodeStore::read(Rc::new(pst)).map_err(format_error)?,
-            ),
+            Ok(pst) => {
+                let store = UnicodeStore::read(Rc::new(pst)).map_err(format_error)?;
+                typed = Some(store.clone());
+                (PstFormat::Unicode, store)
+            }
             Err(unicode_error) => {
                 let ansi =
                     AnsiPstFile::read_from(Box::new(open_read_only(&path).map_err(io_error)?))
@@ -194,6 +200,7 @@ impl PstSource {
             path,
             format,
             store,
+            unicode: typed,
         })
     }
 
@@ -395,6 +402,19 @@ const PR_RTF_COMPRESSED: u16 = 0x1009;
 const PR_HTML: u16 = 0x1013;
 const PR_CREATION_TIME: u16 = 0x3007;
 const PR_SENDER_SMTP_ADDRESS: u16 = 0x5D01;
+/// A subject without the marker some stores put in front of it: `SOH` and a
+/// character giving the length of its prefix ("RE: "), which MS-OXCMSG calls a
+/// subject prefix length.
+pub fn subject_text(subject: &str) -> &str {
+    let mut chars = subject.chars();
+    if chars.next() == Some('\u{1}') {
+        chars.next();
+        chars.as_str()
+    } else {
+        subject
+    }
+}
+
 /// `MSGFLAG_READ`.
 const MSGFLAG_READ: i32 = 0x1;
 
@@ -466,7 +486,7 @@ fn item_record(key: String, folder: &str, properties: &BTreeMap<u16, PropertyVal
         folder: folder.to_owned(),
         class: text(PR_MESSAGE_CLASS).unwrap_or_default(),
         message_id: text(PR_INTERNET_MESSAGE_ID),
-        subject: text(PR_SUBJECT),
+        subject: text(PR_SUBJECT).map(|subject| subject_text(&subject).to_owned()),
         sender,
         sent: time(PR_CLIENT_SUBMIT_TIME),
         received: time(PR_MESSAGE_DELIVERY_TIME),
