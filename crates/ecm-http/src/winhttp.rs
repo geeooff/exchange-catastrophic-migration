@@ -10,9 +10,9 @@ use windows::{
     Win32::Networking::WinHttp::{
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ADDREQ_FLAG_ADD,
         WINHTTP_AUTH_SCHEME_NEGOTIATE, WINHTTP_AUTH_SCHEME_NTLM, WINHTTP_AUTH_TARGET_SERVER,
-        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
-        WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
-        WinHttpOpenRequest, WinHttpQueryAuthSchemes, WinHttpQueryDataAvailable,
+        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+        WINHTTP_QUERY_STATUS_CODE, WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect,
+        WinHttpOpen, WinHttpOpenRequest, WinHttpQueryAuthSchemes, WinHttpQueryDataAvailable,
         WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
         WinHttpSetCredentials, WinHttpSetTimeouts,
     },
@@ -205,6 +205,7 @@ impl HttpClient {
             if status != 401 || self.credential.is_none() {
                 return Ok(Response {
                     status,
+                    headers: raw_headers(&request)?,
                     body: read_body(&request)?,
                 });
             }
@@ -255,6 +256,40 @@ impl HttpClient {
         password.iter_mut().for_each(|c| *c = 0);
         set.map_err(windows_error("WinHttpSetCredentials"))
     }
+}
+
+fn raw_headers(request: &Handle) -> Result<String> {
+    let mut size = 0u32;
+    // SAFETY: `request` holds a response; with no buffer, WinHTTP only reports the
+    // size needed, in bytes, and fails with ERROR_INSUFFICIENT_BUFFER.
+    let _ = unsafe {
+        WinHttpQueryHeaders(
+            request.0,
+            WINHTTP_QUERY_RAW_HEADERS_CRLF,
+            PCWSTR::null(),
+            None,
+            &mut size,
+            std::ptr::null_mut(),
+        )
+    };
+    if size == 0 {
+        return Ok(String::new());
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    // SAFETY: the buffer holds `size` bytes, as WinHTTP asked for.
+    unsafe {
+        WinHttpQueryHeaders(
+            request.0,
+            WINHTTP_QUERY_RAW_HEADERS_CRLF,
+            PCWSTR::null(),
+            Some(buffer.as_mut_ptr().cast()),
+            &mut size,
+            std::ptr::null_mut(),
+        )
+    }
+    .map_err(windows_error("WinHttpQueryHeaders"))?;
+    buffer.truncate(size as usize / 2);
+    Ok(String::from_utf16_lossy(&buffer))
 }
 
 fn status_code(request: &Handle) -> Result<u16> {

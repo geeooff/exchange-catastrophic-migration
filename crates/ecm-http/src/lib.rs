@@ -110,8 +110,20 @@ impl fmt::Debug for Credential {
 pub struct Response {
     /// HTTP status code.
     pub status: u16,
+    /// Raw response headers, `Name: value` lines separated by CRLF.
+    pub headers: String,
     /// Response body.
     pub body: Vec<u8>,
+}
+
+impl Response {
+    /// The value of the first header with this name, case-insensitively.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    }
 }
 
 /// The parts of an `https://host[:port]/path` URL this client needs.
