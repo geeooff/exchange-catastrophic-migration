@@ -190,6 +190,10 @@ enum Command {
         /// then replaced.
         #[arg(long, value_name = "MAILBOX")]
         sender: Option<String>,
+        /// Only replace copies earlier plans made; do not re-create messages the
+        /// target lacks (the user may have deleted them since).
+        #[arg(long)]
+        replacements_only: bool,
     },
     /// Write a plan that copies the Outlook.com inbox rules into the target, with
     /// their folders mapped to the target's, leaving out rules it has by name.
@@ -223,6 +227,22 @@ enum Command {
         /// PST file. It is never written to.
         #[arg(long, value_name = "FILE")]
         pst: PathBuf,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
+    /// Write a plan moving the reviewed `ecm-unmatched` folder's items into a
+    /// quarantine run folder. Only items an applied plan put there. Uses
+    /// `target.after.jsonl` in the work directory. Only reads.
+    PlanPark {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding `target.after.jsonl`.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// The applied plans whose moves put items in `ecm-unmatched`.
+        #[arg(long, value_name = "PLAN", required = true)]
+        after: Vec<PathBuf>,
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
@@ -475,13 +495,17 @@ fn main() -> ExitCode {
             out,
             after,
             sender,
+            replacements_only,
         } => report(pst_plan_cmd::plan_pst_command(
             &ews,
             &work,
             &pst,
             &cutoff,
-            &after,
-            sender.as_deref(),
+            &pst_plan_cmd::Replacements {
+                after: &after,
+                sender: sender.as_deref(),
+                only: replacements_only,
+            },
             &out,
         )),
         Command::PlanRules {
@@ -496,6 +520,12 @@ fn main() -> ExitCode {
             client_only_as_important,
             &out,
         )),
+        Command::PlanPark {
+            ews,
+            work,
+            after,
+            out,
+        } => report(plan_cmd::park_command(&ews, &work, &after, &out)),
         Command::Verify {
             ews,
             work,

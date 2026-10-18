@@ -35,3 +35,8 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
     only classic Outlook ran come without actions or conditions: recreate by hand.
 12. Sticky notes: `ecm plan-notes --ews <url> --work reports --pst <file> --out reports/plan-notes.jsonl`
     copies the PST's notes (HTML body when they have no text) into the Notes folder.
+12. After review, `ecm plan-park --ews <url> --work reports --after reports/plan.jsonl --out reports/plan-park.jsonl`
+    moves what `ecm-unmatched` holds into a quarantine run folder.
+    `ecm plan-pst … --sender "<Name> <address>" --replacements-only` replaces copies
+    with a missing or internal (IMCEAEX) sender without re-creating messages the
+    user may have deleted since; messages with only an RTF body in the PST are kept.
