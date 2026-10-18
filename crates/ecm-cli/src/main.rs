@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_cmd;
 mod fidelity_cmd;
+mod notes_cmd;
 mod pim_cmd;
 mod plan_cmd;
 mod pst_plan_cmd;
@@ -207,6 +208,21 @@ enum Command {
         /// Sign-in authority for Graph.
         #[arg(long, value_name = "TENANT", default_value = "consumers")]
         tenant: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
+    /// Write a plan that copies the PST's sticky notes into the target's Notes
+    /// folder, leaving out notes it has by subject. Only reads.
+    PlanNotes {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the PST inventory (`source.jsonl`).
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// PST file. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
@@ -425,6 +441,12 @@ fn main() -> ExitCode {
             limit,
             dry_run,
         )),
+        Command::PlanNotes {
+            ews,
+            work,
+            pst,
+            out,
+        } => report(notes_cmd::plan_notes_command(&ews, &work, &pst, &out)),
         Command::PlanPim {
             ews,
             client_id,
