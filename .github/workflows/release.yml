@@ -1,52 +1,79 @@
 name: Release
 
-# A tag `vX.Y.Z` builds the Windows x64 binary with the same checks as CI and
-# publishes it as a GitHub release.
+# A tag alone produces the release: push vX.Y.Z and this runs the same checklist
+# a developer runs, builds and zips the binary from that exact commit, attests
+# it, and publishes it with its checksum. Nothing is built or uploaded by hand.
+
 on:
   push:
     tags: ['v*']
 
+# Publishing, and the attestation: the OIDC token signs it, and the two others
+# store it with the files it vouches for.
 permissions:
-  contents: read
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
-env:
-  CARGO_TERM_COLOR: always
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: windows-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
+          # The notes list the commits since the previous tag.
+          fetch-depth: 0
           persist-credentials: false
 
+      # rustup is on GitHub's runners; rust-toolchain.toml names the toolchain.
+      # No cache: a release builds from nothing.
       - name: Rust toolchain
         shell: pwsh
         run: rustup toolchain install
 
-      # The same checklist as CI, then a release build.
-      - name: Test and build
-        shell: pwsh
-        run: .\scripts\build.ps1 build
-
-      - name: Package
+      # The version is bumped in the release commit, so the tag and Cargo.toml
+      # must agree; a release named after one and built from the other would
+      # carry the wrong version.
+      - name: The tag names the version in Cargo.toml
         shell: pwsh
         run: |
-          $name = "ecm-$env:GITHUB_REF_NAME-windows-x64"
-          New-Item -ItemType Directory $name | Out-Null
-          Copy-Item target\release\ecm.exe, README.md, LICENSE $name
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
-          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
-            Set-Content "$name.zip.sha256"
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+          "ECM_VERSION=$version" | Add-Content $env:GITHUB_ENV
+
+      - name: Test, build and zip
+        shell: pwsh
+        run: .\scripts\build.ps1 release
+
+      - name: Checksums and notes
+        shell: pwsh
+        run: .\scripts\release-notes.ps1 -Tag $env:GITHUB_REF_NAME
+
+      # GitHub signs that this workflow built the zip from this tag's commit;
+      # `gh attestation verify <file> --repo geeooff/exchange-catastrophic-migration`
+      # checks it. Taken from the checksums file, so the attestation names the
+      # very file and digest the release publishes.
+      - name: Attest the release files
+        uses: actions/attest@v4
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
 
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $name = "ecm-$env:GITHUB_REF_NAME-windows-x64"
-          gh release create $env:GITHUB_REF_NAME "$name.zip" "$name.zip.sha256" `
-            --title $env:GITHUB_REF_NAME --generate-notes --verify-tag
+          gh release create $env:GITHUB_REF_NAME `
+            "dist\ecm-$env:ECM_VERSION-windows-x64.zip" `
+            dist\SHA256SUMS.txt `
+            --title "ecm $env:ECM_VERSION" `
+            --notes-file dist\notes.md `
+            --verify-tag

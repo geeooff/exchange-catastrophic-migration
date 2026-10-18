@@ -1,9 +1,9 @@
-//! Operations that change a mailbox: creating folders, creating items and moving
-//! items.
+//! Every operation that changes a mailbox: creating folders, items, inbox rules
+//! and contact photos, moving items, and moving a folder into Deleted Items.
 //!
-//! Nothing here updates or deletes an existing item. These operations are used by
-//! `ecm fidelity-test`, inside a dedicated test folder, and by `ecm apply`, which
-//! only runs reviewed plans.
+//! Nothing here deletes anything, and the only change to an existing item is a
+//! contact's photo. These operations are used by `ecm fidelity-test`, inside a
+//! dedicated test folder, and by `ecm apply`, which only runs reviewed plans.
 
 use base64::Engine as _;
 
@@ -154,6 +154,22 @@ impl<T: Transport> EwsClient<T> {
             .into_iter()
             .next()
             .ok_or_else(|| Error::MalformedResponse("MoveFolder returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
+    /// Sets a contact's photo, as the `ContactPicture.jpg` attachment Exchange
+    /// and Outlook use for it.
+    pub fn attach_contact_photo(&self, contact_id: &str, photo: &[u8]) -> Result<()> {
+        let body = format!(
+            r#"<m:CreateAttachment><m:ParentItemId Id="{}"/><m:Attachments><t:FileAttachment><t:Name>ContactPicture.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:IsContactPhoto>true</t:IsContactPhoto><t:Content>{}</t:Content></t:FileAttachment></m:Attachments></m:CreateAttachment>"#,
+            escape(contact_id),
+            base64::engine::general_purpose::STANDARD.encode(photo)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("CreateAttachment returned no message".into()))?
             .into_result()
             .map(|_| ())
     }
@@ -433,6 +449,20 @@ mod tests {
             .move_folder_to_deleted_items("Q1")
             .unwrap();
         assert!(fake.requests.borrow()[0].contains(r#"<m:MoveFolder><m:ToFolderId><t:DistinguishedFolderId Id="deleteditems"/></m:ToFolderId><m:FolderIds><t:FolderId Id="Q1"/></m:FolderIds></m:MoveFolder>"#));
+    }
+
+    #[test]
+    fn attaches_a_contact_photo() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:CreateAttachmentResponse><m:ResponseMessages><m:CreateAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="A1"/></t:FileAttachment></m:Attachments></m:CreateAttachmentResponseMessage></m:ResponseMessages></m:CreateAttachmentResponse>"#,
+            ),
+        )]);
+        EwsClient::new(&fake)
+            .attach_contact_photo("C1", &[0xFF, 0xD8, 0xFF])
+            .unwrap();
+        assert!(fake.requests.borrow()[0].contains(r#"<m:ParentItemId Id="C1"/><m:Attachments><t:FileAttachment><t:Name>ContactPicture.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:IsContactPhoto>true</t:IsContactPhoto><t:Content>/9j/</t:Content>"#));
     }
 
     #[test]

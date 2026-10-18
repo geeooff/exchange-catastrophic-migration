@@ -1,6 +1,6 @@
 [package]
 name = "ecm-ews"
-description = "Exchange Web Services client, used as both source and target."
+description = "Exchange Web Services client for the target mailbox."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

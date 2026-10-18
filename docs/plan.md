@@ -25,7 +25,8 @@ Items received after the migration are healthy and must never be touched.
 
 **Goals**
 
-- Read a trusted **source**: a Unicode PST file, or an Exchange mailbox over EWS.
+- Read trusted **sources**: a Unicode PST file, an Outlook.com mailbox through
+  Microsoft Graph, and later an Exchange mailbox over EWS.
 - Read and repair a **target** Exchange mailbox over EWS.
 - Detect and report every defect above, per item and per folder.
 - Repair by moving, fixing properties, or re-uploading from the source with full
@@ -38,7 +39,8 @@ Items received after the migration are healthy and must never be touched.
 
 - Writing to PST files or to the source mailbox.
 - IMAP, POP or Microsoft Graph as a target.
-- Migrating rules, signatures, delegates or permissions (reported only).
+- Migrating signatures, delegates, permissions, or the safe and blocked sender lists
+  (no API exposes them; inbox rules are copied, `plan-rules`).
 - A graphical interface.
 
 ## 3. Safety rules
@@ -47,7 +49,7 @@ Items received after the migration are healthy and must never be touched.
    its SHA-256 is computed at the start and checked at the end of every run.
 2. `apply` only runs actions from a plan file produced by `plan` and reviewed by the user.
 3. No hard delete. Removed items go to a quarantine folder (`/ecm-quarantine/<run-id>`);
-   emptying it is a separate, explicit command.
+   `plan-discard` later moves a run folder into Deleted Items, which the user empties.
 4. Every action is written to a journal before and after it runs, so a run can resume
    and be audited.
 5. A `backup` command exports the target with EWS `ExportItems` before changes; the
@@ -63,13 +65,13 @@ Cargo workspace:
 
 | Crate | Role |
 |---|---|
-| `ecm-model` | Common model: folders, items, property bags (MAPI tags and named properties), fingerprints |
-| `ecm-pst` | PST source, built on Microsoft's `outlook-pst` |
-| `ecm-ews` | EWS client: SOAP requests, paging, throttling and retries, source and target |
-| `ecm-graph` | Microsoft Graph source (Outlook.com, Microsoft 365): device code sign-in, mail folders, messages; read-only |
+| `ecm-model` | Common model: item records, folder summaries, property comparison, fingerprints, folder paths |
+| `ecm-pst` | PST source, built on Microsoft's `outlook-pst`; full message content and its rebuilding as MIME |
+| `ecm-ews` | EWS client for the target: SOAP requests, paging, throttling and retries; every change in one module (`write`) |
+| `ecm-graph` | Microsoft Graph source (Outlook.com, Microsoft 365): device code sign-in, mail, calendar, contacts, To Do, inbox rules; read-only |
 | `ecm-http` | HTTP transport with NTLM/Negotiate. First implementation: WinHTTP through Microsoft's `windows` crate. Possible portable implementation later (`reqwest` + an SSPI/NTLM crate) |
-| `ecm-store` | Local state as files: inventories (JSON Lines), CSV reports, later plans and journal |
-| `ecm-audit` | Matching, defect detection, reports |
+| `ecm-store` | Local state as files: inventories (JSON Lines), CSV reports |
+| `ecm-audit` | Matching, defect detection, plans (JSON Lines actions), verification |
 | `ecm` (binary) | Command-line interface (`clap`) |
 
 ### Dependencies
@@ -86,7 +88,8 @@ Other candidates, to evaluate:
 - `ews` (thunderbird/ews-rs, MPL-2.0) was evaluated and not used: it has no
   `FindFolder`, `ExportItems` or `UploadItems`. `ecm-ews` writes its SOAP requests by
   hand and parses responses with `quick-xml`.
-- `mail-parser` / `mail-builder`: MIME parsing and building.
+- `mail-parser` / `mail-builder` were not needed: MIME comes whole from Graph, and the
+  few lines that rebuild it from a PST are in `ecm-pst`.
 - `clap`, `serde`/`serde_json`, `sha2`, `base64`.
 - SQLite (`rusqlite`) was planned for local state. JSON Lines files turned out to be
   enough: about 100,000 records load in memory in well under a second, the files
@@ -94,16 +97,24 @@ Other candidates, to evaluate:
 
 ### Commands
 
+Every command but `apply` only reads. `ecm <command> --help` gives the options.
+
 ```
-ecm source check   --pst <file>               # open, checksum, folder tree, counts
-ecm target check   --ews <url> --user <upn>   # authenticate, folder tree, counts
-ecm backup         --target ... --out <dir>    # ExportItems of the whole mailbox
-ecm inventory      --source ... --target ...   # fill the local database
-ecm audit          [--cutoff <date>]           # report: HTML + CSV
-ecm plan           [--strategy repair|rebuild] # write a reviewable plan file
-ecm apply <plan>   [--dry-run]                 # run it, journaled, resumable
-ecm verify                                     # re-inventory and compare again
-ecm quarantine purge <run-id>                  # explicit, final
+ecm source check   --pst <file>                 # open, checksum, folder tree, counts
+ecm target check   --ews <url>                  # authenticate, folder tree, counts, sizes
+ecm target show    --ews <url> --id <id>        # one item's properties, attachments
+ecm target pim     --ews <url>                  # calendar, contacts, inbox rules
+ecm backup         --ews <url> --out <dir>      # ExportItems of the whole mailbox, resumable
+ecm inventory      --work <dir> --pst/--ews/--outlook-com   # item records, JSON Lines
+ecm audit          --work <dir> --cutoff <date> # report: summary + CSV
+ecm plan           --ews <url> --work <dir> ... # repair plan from Outlook.com
+ecm plan-pst       --ews <url> --pst <file> ... # re-create from a PST, rebuilt as MIME
+ecm plan-pim | plan-contact-photos | plan-notes | plan-rules   # other item types
+ecm plan-park | plan-discard                    # set aside, then into Deleted Items
+ecm apply          --plan <file> [--dry-run] [--limit N]   # run it, journaled, resumable
+ecm verify         --ews <url> --work <dir> ... # re-inventory and check again
+ecm report-cleanup --work <dir> --domain ...    # sort the old mailbox once a domain moved
+ecm fidelity-test  --ews <url> ...              # property-by-property spike in ecm-test
 ```
 
 ## 5. Matching and classification
@@ -136,30 +147,33 @@ Folders are classified the same way: OK, missing, hidden/wrong class, duplicate
 
 ## 6. Repair strategies
 
-`plan` writes actions; the user picks a strategy:
+The plans keep healthy copies, move misplaced ones, re-create what is damaged or
+missing from a source, and quarantine duplicates and the damaged copies they
+replace. Nothing is fixed in place: properties a migration got wrong are often the
+ones that can only be set at creation. A first pass also showed that migration
+copies which look healthy can still be damaged, so a second pass (`plan --after`)
+re-creates every migration copy the first one kept.
 
-- **repair**: keep OK items, move misplaced items, fix what can be fixed in place,
-  re-upload what cannot, quarantine duplicates.
-- **rebuild**: quarantine every migrated item (everything matched to the source),
-  then re-upload the whole source. Target-only items are kept.
-
-Actions: `CreateFolder`, `FixFolder` (class, hidden flag, parent), `MoveItem`,
-`UpdateItem` (properties allowed to change after creation), `ReuploadItem`
-(quarantine the damaged copy, create a new one from the source), `QuarantineItem`.
+Actions (JSON Lines, one per step, `requires` naming the step that must succeed
+first): `create-folder`; `recreate` (MIME fetched from Outlook.com at apply time);
+`recreate-mime` (MIME carried by the plan, rebuilt from a PST); `create` (a typed
+calendar item, contact or task, as EWS XML); `contact-photo`; `create-rule`; `move`
+(misplaced, duplicate, damaged, replaced, unmatched); `discard-folder`.
 
 ### Re-upload with full fidelity
 
 Two methods, chosen per item type after a spike (milestone M3):
 
-1. **MIME + extended properties** (messages): build the MIME message from the source
-   (transport headers, bodies, attachments), send it with `CreateItem` as
-   `MimeContent`, and set in the same request `PR_MESSAGE_FLAGS` (without
-   `MSGFLAG_UNSENT`), delivery and submit times, read state, flags and categories.
-2. **Typed item + extended properties** (appointments, contacts, tasks, notes, and
-   messages when MIME is not reliable): create the item with its original
-   `ItemClass` and copy every writable MAPI property, including named properties
-   (recurrence blob, time zones, contact addresses), then attachments with
-   `CreateAttachment`.
+1. **MIME + extended properties** (messages): the MIME message from Outlook.com, or
+   rebuilt from a PST (transport headers, text and HTML bodies, attachments, S/MIME
+   signed entities), sent with `CreateItem` as `MimeContent`, with in the same
+   request `PR_MESSAGE_FLAGS` (read, and without `MSGFLAG_UNSENT`), delivery and
+   submit times.
+2. **Typed items** (appointments, contacts, tasks, notes): EWS `CalendarItem`,
+   `Contact` and `Task` elements built from Graph (recurrence, local times with their
+   time zone, attendees of the user's own meetings), notes from the PST, contact
+   photos with `CreateAttachment`. Exceptions to a recurring series are not copied
+   yet.
 
 Exchange → Exchange copies can use `ExportItems` + `UploadItems`, which keeps every
 property.

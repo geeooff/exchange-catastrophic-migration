@@ -1,7 +1,8 @@
 # Contributing
 
-Thanks for your interest. The project is at an early stage: read
-[docs/plan.md](docs/plan.md) first, it describes the design and the milestones.
+Thanks for your interest. Read [docs/plan.md](docs/plan.md) first: it describes the
+design and the milestones. [CHANGELOG.md](CHANGELOG.md) says what each release
+brought.
 
 ## Build and test
 
@@ -11,6 +12,7 @@ with rustfmt and clippy. Before committing, run the same checklist as CI:
 ```
 .\scripts\build.ps1            # fmt, clippy, rustdoc, tests, doc links, no mailbox data tracked
 .\scripts\build.ps1 build      # the same, then a release build
+.\scripts\build.ps1 release    # from a clean tree: the same, then the zip in dist\
 ```
 
 Warnings are errors, in clippy and in rustdoc.
@@ -19,12 +21,13 @@ Warnings are errors, in clippy and in rustdoc.
 
 | Path | Content |
 |---|---|
-| `crates/ecm-model` | Common model: folders, items, property bags, fingerprints |
-| `crates/ecm-pst` | Read-only PST source |
-| `crates/ecm-http` | HTTP transport with NTLM/Negotiate |
-| `crates/ecm-ews` | EWS client |
-| `crates/ecm-store` | Local SQLite state |
-| `crates/ecm-audit` | Matching, defects, reports |
+| `crates/ecm-model` | Common model: item records, folders, property comparison, folder paths |
+| `crates/ecm-pst` | Read-only PST source, and rebuilding its messages as MIME |
+| `crates/ecm-http` | HTTP transport with NTLM/Negotiate, Credential Manager |
+| `crates/ecm-ews` | EWS client for the target mailbox |
+| `crates/ecm-graph` | Read-only Microsoft Graph source (Outlook.com) |
+| `crates/ecm-store` | Local state: JSON Lines inventories, CSV reports |
+| `crates/ecm-audit` | Matching, defects, plans, verification |
 | `crates/ecm-cli` | The `ecm` command-line tool |
 
 ## Rules
@@ -34,7 +37,8 @@ Warnings are errors, in clippy and in rustdoc.
   but check your diff anyway.
 - **Never write to a source.** Code that reads a PST or a source mailbox must not be able
   to modify it.
-- No hard delete on a target outside the explicit `quarantine purge` command.
+- No hard delete on a target: items go to a quarantine folder, which leaves only
+  through `plan-discard`, into Deleted Items, for the user to empty.
 - Credentials never appear in code, files, logs or command-line arguments.
 - `unsafe` code is forbidden everywhere except `ecm-http`, where it is limited to calls
   into the Windows API, each with a `// SAFETY:` comment.

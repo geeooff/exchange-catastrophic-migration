@@ -5,9 +5,10 @@
 #
 #   .\scripts\build.ps1            # test (the default)
 #   .\scripts\build.ps1 build      # test, then build release
+#   .\scripts\build.ps1 release    # from a clean tree: test, build, zip into dist\
 
 param(
-    [ValidateSet('test', 'build')]
+    [ValidateSet('test', 'build', 'release')]
     [string] $Task = 'test'
 )
 
@@ -82,7 +83,7 @@ function Invoke-Tests {
     }
     $broken = @()
     # *.local.md files are never published, so they are not checked.
-    $pages = @('README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md' | ForEach-Object { Join-Path $root $_ }) +
+    $pages = @('README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CHANGELOG.md' | ForEach-Object { Join-Path $root $_ }) +
              (Get-ChildItem (Join-Path $root '.claude\skills') -Recurse -Filter 'SKILL.md' -ErrorAction SilentlyContinue |
                   ForEach-Object { $_.FullName }) +
              (Get-ChildItem (Join-Path $root 'docs') -Recurse -Filter '*.md' |
@@ -137,10 +138,62 @@ function Invoke-Build {
     Run 'cargo' @('build', '--workspace', '--release', '--locked')
 }
 
+# A release ships what a commit holds, so that commit must hold everything.
+function Assert-CleanTree {
+    Step "The working tree is clean"
+    $changes = & git -C $root status --porcelain
+    if ($LASTEXITCODE -ne 0) { Fail "git status exited $LASTEXITCODE" }
+    if ($changes) {
+        $changes | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        Fail "commit or stash first -- a release must name a commit that contains what it ships"
+    }
+    Write-Host "    clean"
+}
+
+# The workspace version, from Cargo.toml.
+function Get-Version {
+    $match = Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"'
+    if (-not $match) { Fail "no version in Cargo.toml" }
+    $match.Matches[0].Groups[1].Value
+}
+
+# dist\ecm-<version>-windows-x64.zip: the binary, with the README, the change
+# log and the licence beside it.
+function Invoke-Release {
+    $version = Get-Version
+    Step "CHANGELOG.md has a dated section for $version"
+    $heading = "^## \[$([regex]::Escape($version))\] - \d{4}-\d{2}-\d{2}"
+    if (-not (Select-String -Path (Join-Path $root 'CHANGELOG.md') -Pattern $heading -Quiet)) {
+        Fail "CHANGELOG.md has no dated section for $version -- a release commit carries ``## [$version] - YYYY-MM-DD``"
+    }
+    Write-Host "    found"
+
+    Step "The binary reports $version"
+    $reported = & (Join-Path $root 'target\release\ecm.exe') --version
+    if ($reported -ne "ecm $version") { Fail "ecm --version says `"$reported`", not `"ecm $version`"" }
+    Write-Host "    $reported"
+
+    Step "Zip"
+    $name = "ecm-$version-windows-x64"
+    $dist = Join-Path $root 'dist'
+    $stage = Join-Path $dist $name
+    $zip = Join-Path $dist "$name.zip"
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    foreach ($file in 'target\release\ecm.exe', 'README.md', 'CHANGELOG.md', 'LICENSE') {
+        Copy-Item (Join-Path $root $file) $stage
+    }
+    if (Test-Path $zip) { Remove-Item $zip }
+    Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
+    Write-Host "    dist\$name.zip  ($([math]::Round((Get-Item $zip).Length / 1KB)) KB)" -ForegroundColor Green
+}
+
 # --- go ---------------------------------------------------------------------
 
+if ($Task -eq 'release') { Assert-CleanTree }
 Invoke-Tests
-if ($Task -eq 'build') { Invoke-Build }
+if ($Task -in @('build', 'release')) { Invoke-Build }
+if ($Task -eq 'release') { Invoke-Release }
 
 Write-Host ""
 Write-Host "$Task OK" -ForegroundColor Green

@@ -6,7 +6,9 @@
 //! only for read permissions, and keeps the token in memory for the run.
 //!
 //! It needs the client id of an app registration that allows personal Microsoft
-//! accounts and public client flows, with the delegated `Mail.Read` permission.
+//! accounts and public client flows, with the delegated `Mail.Read`,
+//! `Contacts.Read`, `Calendars.Read`, `Tasks.Read` and `User.Read` permissions, and
+//! `MailboxSettings.Read` to read inbox rules.
 
 #![forbid(unsafe_code)]
 

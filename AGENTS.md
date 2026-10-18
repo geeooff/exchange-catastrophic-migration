@@ -1,20 +1,24 @@
 # AGENTS.md
 
 `ecm`: Rust CLI that audits and repairs an Exchange mailbox after a botched
-migration. Source (read-only): PST file or Exchange over EWS. Target: Exchange over
+migration. Sources (read-only): a PST file, and an Outlook.com mailbox through
+Microsoft Graph; Exchange over EWS as a source is planned (M7). Target: Exchange over
 EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan.md)
-(milestones M0–M8, mark ✅ when done).
+(milestones M0–M8, mark ✅ when done). Releases: [CHANGELOG.md](CHANGELOG.md).
 
 ## Layout
 
-- `ecm-model`: `FolderSummary`, shared by sources and targets.
-- `ecm-pst`: read-only PST on Microsoft's `outlook-pst`.
+- `ecm-model`: item records, folder summaries, property comparison, folder paths.
+- `ecm-pst`: read-only PST on Microsoft's `outlook-pst`; full message content and
+  its rebuilding as MIME.
 - `ecm-http`: WinHTTP + NTLM/Negotiate, Credential Manager. Only crate with `unsafe`.
-- `ecm-ews`: hand-written SOAP + `quick-xml` tree: GetFolder, FindFolder, FindItem,
-  ExportItems, backup.
-- `ecm-graph`: read-only Microsoft Graph source (Outlook.com), device code sign-in.
-- `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching and defects.
-- `ecm-cli`: the `ecm` binary.
+- `ecm-ews`: hand-written SOAP + `quick-xml` tree: folders, items, export (backup),
+  details, calendar and contact listings; every change in `write`.
+- `ecm-graph`: read-only Microsoft Graph source (Outlook.com): device code sign-in,
+  mail, calendar, contacts, To Do, inbox rules.
+- `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching, defects, plans,
+  verification.
+- `ecm-cli`: the `ecm` binary, one module per command family.
 
 ## Rules
 
@@ -23,9 +27,11 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   read access only.
 - On a target: no hard delete (quarantine instead), and changes only through
   `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
-  folders leave only through `plan-discard`, into Deleted Items: the user empties it. The single exception
-  is `ecm fidelity-test`, which only creates items, only in the `ecm-test` folder.
-- Plans only move items from the top of the target mailbox (migration debris).
+  folders leave only through `plan-discard`, into Deleted Items: the user empties
+  it. The single exception is `ecm fidelity-test`, which only creates items, only
+  in the `ecm-test` folder.
+- Plans only move items `ecm` put where they are: migration debris at the top of the
+  target mailbox, and items an applied plan moved (`--after`, `plan-park`).
 - Never track mailbox data or private notes. Exceptions: fixtures under
   `crates/*/tests/fixtures/`, each named in that folder's `README.md`. Private notes and
   config go in `*.local.*` files, which are gitignored.
@@ -43,8 +49,10 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   the same script on `windows-latest`.
 - One branch and one PR per milestone. `main` is protected (required check `build`).
   Dependabot merges compatible crate updates on its own.
-- A tag `vX.Y.Z` publishes a Windows x64 release (`release.yml`): tag only with the
-  user's go-ahead.
+- Releases: bump the workspace version and date its `CHANGELOG.md` section in the
+  release commit; `.\scripts\build.ps1 release` then zips into `dist\`. A tag
+  `vX.Y.Z` makes `release.yml` rebuild, attest (`actions/attest`) and publish the zip
+  with its checksum: tag only with the user's go-ahead.
 - Agents may push branches, open PRs, fix CI failures and enable auto-merge
   (`gh pr merge --auto --merge`). Never bypass a required check or the ruleset.
 - Commit only when asked. Messages say what and why, ending with the

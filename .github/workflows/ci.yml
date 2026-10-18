@@ -48,8 +48,27 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.version }}-
 
       # The same checklist a developer runs: fmt, clippy -D warnings, rustdoc
-      # -D warnings, tests, documentation links, no mailbox data tracked, then
-      # a release build.
-      - name: Test and build
+      # -D warnings, tests, documentation links, no mailbox data tracked, a
+      # release build, and the zip a release would publish. A release nobody
+      # can make by hand is not one CI can make either, so there is one script
+      # and CI calls it.
+      - name: Test, build and zip
         shell: pwsh
-        run: .\scripts\build.ps1 build
+        run: .\scripts\build.ps1 release
+
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      # GitHub serves every artifact as a zip of its own, so the level is 0 to
+      # keep it a plain container around a file already compressed. The
+      # release workflow attaches the zip itself to the release.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ecm-${{ steps.version.outputs.version }}-windows-x64
+          path: dist/*.zip
+          compression-level: 0
+          if-no-files-found: error
