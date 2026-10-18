@@ -6,7 +6,7 @@
 //! folder. Each quarantine of a damaged copy depends on the re-creation that
 //! replaces it, so a failed re-creation keeps the old copy in place.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ecm_model::{ItemRecord, path};
 use serde::{Deserialize, Serialize};
@@ -150,12 +150,18 @@ pub fn counts(actions: &[Action]) -> Vec<(&'static str, usize)> {
 /// Only target items at the top of the mailbox, where the migration left its
 /// copies, are moved. Items in any other folder were delivered or filed there
 /// and are left alone, and so are the source items they serve.
+///
+/// `replace` holds migration copies an earlier `apply` moved into folders (their
+/// ids, from its journal). They are never trusted, even when their properties
+/// look right (bodies emptied, attachments with every LF turned into CRLF): each
+/// is re-created from its source item, then quarantined.
 pub fn plan(
     audit: &Audit,
     source: &[ItemRecord],
     target: &[ItemRecord],
     folders: &FolderMap,
     existing: &BTreeSet<String>,
+    replace: &HashSet<String>,
     run: &str,
 ) -> Vec<Action> {
     let quarantine = path::join(&path::join("", QUARANTINE_FOLDER), run);
@@ -172,7 +178,10 @@ pub fn plan(
     let mut needed: BTreeSet<String> = BTreeSet::new();
     let mut recreate = Vec::new();
     let mut moves = Vec::new();
-    let at_top = |copy: usize| target[copy].folder.is_empty();
+    // Items a plan may move: migration debris at the top, and migration copies an
+    // earlier `apply` moved, never mail filed by the user.
+    let to_replace = |copy: usize| replace.contains(target[copy].key.as_str());
+    let at_top = |copy: usize| target[copy].folder.is_empty() || to_replace(copy);
     for (s, (item, status)) in source.iter().zip(&audit.source_status).enumerate() {
         let skipped_folder = path::split(&item.folder)
             .first()
@@ -184,6 +193,12 @@ pub fn plan(
             continue;
         }
         let to = folders.target(&item.folder);
+        let status = match (status, copy_of.get(&s)) {
+            (SourceStatus::Ok | SourceStatus::Misplaced, Some(&copy)) if to_replace(copy) => {
+                &SourceStatus::Degraded
+            }
+            (status, _) => status,
+        };
         match status {
             SourceStatus::Ok => {}
             SourceStatus::Misplaced => {
@@ -340,7 +355,15 @@ mod tests {
             .map(String::from)
             .collect();
 
-        let actions = plan(&audit, &source, &target, &folders(), &existing, "run1");
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing,
+            &HashSet::new(),
+            "run1",
+        );
 
         let quarantine = "ecm-quarantine/run1".to_owned();
         assert_eq!(
@@ -420,8 +443,60 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect();
-        let actions = plan(&audit, &source, &target, &folders(), &existing, "r");
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing,
+            &HashSet::new(),
+            "r",
+        );
         assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn replaces_a_migration_copy_an_earlier_apply_moved() {
+        let source = vec![message("s", "Inbox", "<1>", 3)];
+        // In the right folder and looking healthy: still a migration copy.
+        let emptied = message("t-moved", "Boîte de réception", "<1>", 3);
+        let mut mapped = source.clone();
+        mapped[0].folder = "Boîte de réception".into();
+        let audit = audit(&mapped, std::slice::from_ref(&emptied), 1000);
+        assert_eq!(audit.source_status, [SourceStatus::Ok]);
+        let existing: BTreeSet<String> = [
+            "Boîte de réception",
+            "ecm-quarantine",
+            "ecm-quarantine/r",
+            "ecm-unmatched",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let untouched = plan(
+            &audit,
+            &mapped,
+            std::slice::from_ref(&emptied),
+            &folders(),
+            &existing,
+            &HashSet::new(),
+            "r",
+        );
+        assert!(untouched.is_empty(), "{untouched:?}");
+        let moved: HashSet<String> = ["t-moved".to_owned()].into();
+        let actions = plan(
+            &audit,
+            &mapped,
+            &[emptied],
+            &folders(),
+            &existing,
+            &moved,
+            "r",
+        );
+        assert_eq!(counts(&actions), [("recreate", 1), ("quarantine", 1)]);
+        assert!(
+            matches!(&actions[1], Action::Move { requires: Some(0), reason, .. } if reason == "damaged")
+        );
     }
 
     #[test]

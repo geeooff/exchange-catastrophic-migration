@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod plan;
+pub mod verify;
 
 use std::collections::HashMap;
 
@@ -27,8 +28,11 @@ pub enum Defect {
     SenderLost,
     /// The source has Internet headers, the copy has none.
     HeadersLost,
-    /// The native body format differs (e.g. HTML became plain text).
+    /// An HTML body became plain text. Other format changes are not damage: MIME
+    /// has no RTF, so an RTF body comes back as HTML or text.
     BodyFormatChanged,
+    /// The source item has a body, the copy's is empty.
+    ContentLost,
     /// Matched by fingerprint: the `Message-ID` is missing or different.
     MessageIdChanged,
     /// Read state differs. Not damage, but worth restoring.
@@ -50,6 +54,7 @@ impl Defect {
             Defect::SenderLost => "sender-lost",
             Defect::HeadersLost => "headers-lost",
             Defect::BodyFormatChanged => "body-format-changed",
+            Defect::ContentLost => "content-lost",
             Defect::MessageIdChanged => "message-id-changed",
             Defect::ReadStateChanged => "read-state-changed",
         }
@@ -163,10 +168,11 @@ pub fn defects(source: &ItemRecord, copy: &ItemRecord, by_fingerprint: bool) -> 
     if source.has_headers == Some(true) && copy.has_headers == Some(false) {
         defects.push(Defect::HeadersLost);
     }
-    if let (Some(a), Some(b)) = (source.native_body, copy.native_body)
-        && a != b
-    {
+    if source.native_body == Some(3) && copy.native_body == Some(1) {
         defects.push(Defect::BodyFormatChanged);
+    }
+    if source.body_empty == Some(false) && copy.body_empty == Some(true) {
+        defects.push(Defect::ContentLost);
     }
     if by_fingerprint {
         defects.push(Defect::MessageIdChanged);
@@ -412,6 +418,19 @@ mod tests {
         let audit = audit(&source, &target, CUTOFF);
         assert_eq!(audit.source_copies, [1, 1]);
         assert_eq!(audit.duplicates(), 0);
+    }
+
+    #[test]
+    fn an_emptied_body_is_lost_content() {
+        let mut source = message("s1", "Inbox", "<1>", 100);
+        source.body_empty = Some(false);
+        let mut emptied = message("t1", "Inbox", "<1>", 100);
+        emptied.body_empty = Some(true);
+        assert_eq!(defects(&source, &emptied, false), [Defect::ContentLost]);
+        // Unknown on either side, or empty in the source too: nothing lost.
+        assert!(defects(&message("s", "Inbox", "<1>", 100), &emptied, false).is_empty());
+        source.body_empty = Some(true);
+        assert!(defects(&source, &emptied, false).is_empty());
     }
 
     #[test]

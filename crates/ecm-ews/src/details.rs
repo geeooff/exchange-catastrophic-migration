@@ -53,6 +53,83 @@ impl<T: Transport> EwsClient<T> {
     }
 }
 
+/// A file attached to an item, with its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// File name.
+    pub name: String,
+    /// MIME content type, as stored.
+    pub content_type: String,
+    /// The file's bytes.
+    pub content: Vec<u8>,
+}
+
+impl<T: Transport> EwsClient<T> {
+    /// The file attachments of an item, with their content (`GetItem`, then
+    /// `GetAttachment`). Only reads.
+    pub fn attachments(&self, item_id: &str) -> Result<Vec<Attachment>> {
+        let body = format!(
+            r#"<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="item:Attachments"/></t:AdditionalProperties></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds></m:GetItem>"#,
+            escape(item_id)
+        );
+        let message = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("GetItem returned no message".into()))?
+            .into_result()?;
+        let ids: Vec<String> = message
+            .element
+            .path(&["Items"])
+            .and_then(|items| items.children.first())
+            .and_then(|item| item.child("Attachments"))
+            .map(|attachments| {
+                attachments
+                    .children
+                    .iter()
+                    .filter(|a| a.name == "FileAttachment")
+                    .filter_map(|a| a.child("AttachmentId")?.attribute("Id"))
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut body = String::from("<m:GetAttachment><m:AttachmentIds>");
+        for id in &ids {
+            body.push_str(&format!(r#"<t:AttachmentId Id="{}"/>"#, escape(id)));
+        }
+        body.push_str("</m:AttachmentIds></m:GetAttachment>");
+        let mut found = Vec::new();
+        for message in self.call(&body)? {
+            let message = message.into_result()?;
+            for attachment in message
+                .element
+                .child("Attachments")
+                .map(|a| a.children.as_slice())
+                .unwrap_or_default()
+            {
+                use base64::Engine as _;
+                let content = attachment.child_text("Content").unwrap_or_default();
+                found.push(Attachment {
+                    name: attachment.child_text("Name").unwrap_or_default().to_owned(),
+                    content_type: attachment
+                        .child_text("ContentType")
+                        .unwrap_or_default()
+                        .to_owned(),
+                    content: base64::engine::general_purpose::STANDARD
+                        .decode(content.trim())
+                        .map_err(|e| {
+                            Error::MalformedResponse(format!("attachment content: {e}"))
+                        })?,
+                });
+            }
+        }
+        Ok(found)
+    }
+}
+
 /// Normalizes an EWS item element into a [`PropertyMap`].
 pub fn properties(item: &Element) -> PropertyMap {
     let mut map = PropertyMap::new();
@@ -162,6 +239,37 @@ mod tests {
         EwsClient,
         testing::{FakeTransport, soap},
     };
+
+    #[test]
+    fn reads_attachments_with_their_content() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                soap(
+                    r#"<m:GetItemResponse><m:ResponseMessages><m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:Message><t:ItemId Id="A"/><t:Attachments><t:FileAttachment><t:AttachmentId Id="AT1"/><t:Name>a.jpg</t:Name></t:FileAttachment><t:ItemAttachment><t:AttachmentId Id="AT2"/></t:ItemAttachment></t:Attachments></t:Message></m:Items></m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>"#,
+                ),
+            ),
+            (
+                200,
+                soap(
+                    r#"<m:GetAttachmentResponse><m:ResponseMessages><m:GetAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="AT1"/><t:Name>a.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:Content>/9j/</t:Content></t:FileAttachment></m:Attachments></m:GetAttachmentResponseMessage></m:ResponseMessages></m:GetAttachmentResponse>"#,
+                ),
+            ),
+        ]);
+        let found = EwsClient::new(&fake).attachments("A").unwrap();
+        assert_eq!(
+            found,
+            [super::Attachment {
+                name: "a.jpg".into(),
+                content_type: "image/jpeg".into(),
+                content: vec![0xFF, 0xD8, 0xFF],
+            }]
+        );
+        assert!(
+            fake.requests.borrow()[1]
+                .contains(r#"<m:AttachmentIds><t:AttachmentId Id="AT1"/></m:AttachmentIds>"#)
+        );
+    }
 
     #[test]
     fn normalizes_item_properties() {

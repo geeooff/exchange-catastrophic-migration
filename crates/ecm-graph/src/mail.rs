@@ -117,7 +117,7 @@ impl<T: Transport> GraphClient<T> {
         let url = format!(
             "/me/mailFolders/{}/messages?$top=500&$select={}&$expand={}",
             encode(&folder.id),
-            "id,subject,internetMessageId,from,sentDateTime,receivedDateTime,createdDateTime,isRead,hasAttachments",
+            "id,subject,internetMessageId,from,sentDateTime,receivedDateTime,createdDateTime,isRead,hasAttachments,bodyPreview",
             encode(&format!(
                 "singleValueExtendedProperties($filter={EXTENDED})"
             ))
@@ -274,6 +274,9 @@ fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
         read: message["isRead"].as_bool(),
         has_headers: None,
         native_body,
+        body_empty: message["bodyPreview"]
+            .as_str()
+            .map(|preview| preview.trim().is_empty()),
     })
 }
 

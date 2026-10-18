@@ -22,6 +22,7 @@ ecm-pst.workspace = true
 ecm-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 ecm-http.workspace = true

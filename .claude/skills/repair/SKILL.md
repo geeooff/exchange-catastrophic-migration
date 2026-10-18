@@ -17,3 +17,9 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
 5. Nothing is deleted: duplicates and damaged copies go to
    `ecm-quarantine/<run>`, and unknown items go to `ecm-unmatched`. Purging the
    quarantine is a separate, explicit decision.
+6. After `apply`: `ecm verify --ews <url> --work reports --cutoff <date>` (only reads)
+   inventories the target again into `target.after.jsonl` and checks the live
+   folders. Inspect a suspicious item with `ecm target show --id <id> --attachments`.
+7. A second pass replaces the migration copies the first plan moved into folders:
+   `ecm plan … --after reports/plan.jsonl --out reports/plan2.jsonl`, with the
+   after-inventory as `target.jsonl` in its work directory.

@@ -1,7 +1,7 @@
 //! `ecm plan` and `ecm apply`.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     fs::{self, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
@@ -29,6 +29,7 @@ pub fn plan_command(
     kind: SourceKind,
     cutoff: &str,
     ews: &EwsArgs,
+    after: &[PathBuf],
     out: &Path,
 ) -> Result<(), String> {
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
@@ -37,34 +38,31 @@ pub fn plan_command(
         SourceKind::Pst => SOURCE_INVENTORY,
         SourceKind::Outlook => OUTLOOK_INVENTORY,
     };
-    let source = read_inventory(&work.join(source_file)).map_err(|e| e.to_string())?;
-    let target = read_inventory(&work.join(TARGET_INVENTORY)).map_err(|e| e.to_string())?;
-    let audit = ecm_audit::audit(&source, &target, cutoff);
+    let mut source = read_inventory(&work.join(source_file)).map_err(|e| e.to_string())?;
+    // Items set aside (quarantine, unmatched, test) are not part of the mailbox
+    // being rebuilt.
+    let target: Vec<_> = read_inventory(&work.join(TARGET_INVENTORY))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|item| !ecm_audit::verify::is_parked(&item.folder))
+        .collect();
+    let mut moved = HashSet::new();
+    for plan in after {
+        moved.extend(moved_items(plan)?);
+    }
 
     let client = connect(ews)?;
-    let tree = client
-        .folder_tree("msgfolderroot")
-        .map_err(|e| e.to_string())?;
-    let paths: HashMap<String, String> = tree
-        .with_paths()
-        .into_iter()
-        .map(|(path, folder)| (folder.id.clone(), path))
-        .collect();
-    let existing: BTreeSet<String> = paths.values().cloned().collect();
-    let mut folders = FolderMap::default();
-    for (id, _) in WELL_KNOWN {
-        if let Ok(folder) = client.get_distinguished_folder(id)
-            && let Some(path) = paths.get(&folder.id)
-        {
-            folders.well_known.insert((*id).to_owned(), path.clone());
-        }
+    let (folders, existing) = folder_map(&client)?;
+    for item in &mut source {
+        item.folder = folders.target(&item.folder);
     }
+    let audit = ecm_audit::audit(&source, &target, cutoff);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let run = format_utc(now).replace([' ', ':'], "-");
-    let actions = plan(&audit, &source, &target, &folders, &existing, &run);
+    let actions = plan(&audit, &source, &target, &folders, &existing, &moved, &run);
 
     let mut text = String::new();
     for action in &actions {
@@ -83,6 +81,44 @@ pub fn plan_command(
         out.display()
     );
     Ok(())
+}
+
+/// Ids of the items an applied plan moved, from its journal (a moved item gets a
+/// new id, which the journal records).
+fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
+    let actions = read_plan(plan)?;
+    let journal = read_journal(&journal_path(plan))?;
+    Ok(journal
+        .into_iter()
+        .filter(|(step, line)| {
+            line.status == "done" && matches!(actions.get(*step), Some(Action::Move { .. }))
+        })
+        .filter_map(|(_, line)| line.id)
+        .collect())
+}
+
+/// The target's folder paths, and how source folders map to them.
+pub fn folder_map<T: ecm_ews::Transport>(
+    client: &ecm_ews::EwsClient<T>,
+) -> Result<(FolderMap, BTreeSet<String>), String> {
+    let tree = client
+        .folder_tree("msgfolderroot")
+        .map_err(|e| e.to_string())?;
+    let paths: HashMap<String, String> = tree
+        .with_paths()
+        .into_iter()
+        .map(|(path, folder)| (folder.id.clone(), path))
+        .collect();
+    let existing: BTreeSet<String> = paths.values().cloned().collect();
+    let mut folders = FolderMap::default();
+    for (id, _) in WELL_KNOWN {
+        if let Ok(folder) = client.get_distinguished_folder(id)
+            && let Some(path) = paths.get(&folder.id)
+        {
+            folders.well_known.insert((*id).to_owned(), path.clone());
+        }
+    }
+    Ok((folders, existing))
 }
 
 /// One line of an apply journal.

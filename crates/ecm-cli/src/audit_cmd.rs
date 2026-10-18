@@ -73,21 +73,7 @@ pub fn inventory(
         );
     }
     if let Some(ews) = ews {
-        let client = connect(ews)?;
-        let tree = client
-            .folder_tree("msgfolderroot")
-            .map_err(|e| e.to_string())?;
-        let mut items = Vec::new();
-        for (path, folder) in tree.with_paths() {
-            if folder.kind == FolderKind::Search || folder.total_count == 0 {
-                continue;
-            }
-            let found = client
-                .inventory_items(&folder.id, &path)
-                .map_err(|e| e.to_string())?;
-            eprintln!("  target {}: {} items", display(&path), found.len());
-            items.extend(found);
-        }
+        let items = inventory_target(&connect(ews)?)?;
         let path = work.join(TARGET_INVENTORY);
         write_inventory(&path, &items).map_err(|e| e.to_string())?;
         println!(
@@ -97,6 +83,27 @@ pub fn inventory(
         );
     }
     Ok(())
+}
+
+/// Reads every item of the target mailbox, folder by folder. Only reads.
+pub fn inventory_target<T: ecm_ews::Transport>(
+    client: &ecm_ews::EwsClient<T>,
+) -> Result<Vec<ItemRecord>, String> {
+    let tree = client
+        .folder_tree("msgfolderroot")
+        .map_err(|e| e.to_string())?;
+    let mut items = Vec::new();
+    for (path, folder) in tree.with_paths() {
+        if folder.kind == FolderKind::Search || folder.total_count == 0 {
+            continue;
+        }
+        let found = client
+            .inventory_items(&folder.id, &path)
+            .map_err(|e| e.to_string())?;
+        eprintln!("  target {}: {} items", display(&path), found.len());
+        items.extend(found);
+    }
+    Ok(items)
 }
 
 #[cfg(windows)]
@@ -144,7 +151,7 @@ fn inventory_graph(_: &Path, _: &GraphArgs) -> Result<(), String> {
     Err("Microsoft Graph access needs Windows for now (WinHTTP)".into())
 }
 
-fn display(path: &str) -> &str {
+pub(crate) fn display(path: &str) -> &str {
     if path.is_empty() { "(top)" } else { path }
 }
 
