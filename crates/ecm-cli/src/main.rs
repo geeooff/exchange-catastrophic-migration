@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_cmd;
 mod fidelity_cmd;
+mod pim_cmd;
 mod plan_cmd;
 mod verify_cmd;
 use ecm_model::FolderSummary;
@@ -126,6 +127,22 @@ enum Command {
         #[arg(long, value_name = "PLAN")]
         after: Vec<PathBuf>,
     },
+    /// Write a plan that copies the Outlook.com calendar, contacts and To Do tasks
+    /// into the target's default folders, leaving out what they already hold.
+    /// Only reads.
+    PlanPim {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
     Apply {
@@ -219,6 +236,12 @@ enum TargetCommand {
         #[arg(long, value_name = "DIR", requires = "attachments")]
         save: Option<PathBuf>,
     },
+    /// List the default calendar (start in UTC, UID, subject) and the default
+    /// contacts. Only reads.
+    Pim {
+        #[command(flatten)]
+        ews: EwsArgs,
+    },
 }
 
 /// How to reach an Exchange mailbox.
@@ -264,6 +287,7 @@ fn main() -> ExitCode {
             attachments,
             save,
         }) => report(target_show(&ews, &ids, attachments, save.as_deref())),
+        Command::Target(TargetCommand::Pim { ews }) => report(target_pim(&ews)),
         Command::Backup { ews, out } => report(backup(&ews, out)),
         Command::Inventory {
             work,
@@ -333,6 +357,16 @@ fn main() -> ExitCode {
             limit,
             dry_run,
         )),
+        Command::PlanPim {
+            ews,
+            client_id,
+            tenant,
+            out,
+        } => report(pim_cmd::plan_pim_command(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            &out,
+        )),
         Command::Verify {
             ews,
             work,
@@ -362,6 +396,37 @@ fn report(outcome: Result<(), String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn target_pim(ews: &EwsArgs) -> Result<(), String> {
+    let client = connect(ews)?;
+    let calendar = client
+        .get_distinguished_folder("calendar")
+        .map_err(|e| e.to_string())?;
+    let mut events = client
+        .calendar_briefs(&calendar.id)
+        .map_err(|e| e.to_string())?;
+    events.sort_by_key(|e| e.start);
+    println!("Calendar: {} items", events.len());
+    for event in &events {
+        println!(
+            "  {}  {}  {}",
+            event
+                .start
+                .map(ecm_model::item::format_utc)
+                .unwrap_or_default(),
+            event.uid.as_deref().unwrap_or("-"),
+            event.subject.as_deref().unwrap_or_default()
+        );
+    }
+    let contacts = client
+        .get_distinguished_folder("contacts")
+        .map_err(|e| e.to_string())?;
+    let contacts = client
+        .contact_briefs(&contacts.id)
+        .map_err(|e| e.to_string())?;
+    println!("Contacts: {} items", contacts.len());
+    Ok(())
 }
 
 fn target_show(

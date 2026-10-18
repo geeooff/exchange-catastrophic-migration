@@ -84,6 +84,18 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         requires: Option<usize>,
     },
+    /// Create an item from its EWS XML: a calendar item, contact or task copied
+    /// from a source that has no MIME for it.
+    Create {
+        /// `event`, `contact` or `task`.
+        kind: String,
+        /// Target folder path.
+        to: String,
+        /// Subject or name, for reports.
+        subject: Option<String>,
+        /// The item, as EWS XML (`<t:CalendarItem>`, `<t:Contact>`, `<t:Task>`).
+        item: String,
+    },
 }
 
 impl Action {
@@ -95,6 +107,12 @@ impl Action {
             Action::Move { reason, .. } => match reason.as_str() {
                 "misplaced" => "move",
                 _ => "quarantine",
+            },
+            Action::Create { kind, .. } => match kind.as_str() {
+                "event" => "create-event",
+                "contact" => "create-contact",
+                "task" => "create-task",
+                _ => "create",
             },
         }
     }

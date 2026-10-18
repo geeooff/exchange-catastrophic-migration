@@ -66,3 +66,6 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - Migration copies can look healthy and still be damaged: emptied bodies (detected
   with the EWS `item:Preview` and Graph `bodyPreview`), duplicated recipients, and
   attachments where every LF byte became CRLF. Never trust them: replace them.
+- EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
+  in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
+  each Graph event again with `Prefer: outlook.timezone` in its own zone.

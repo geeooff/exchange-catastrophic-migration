@@ -23,3 +23,7 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
 7. A second pass replaces the migration copies the first plan moved into folders:
    `ecm plan … --after reports/plan.jsonl --out reports/plan2.jsonl`, with the
    after-inventory as `target.jsonl` in its work directory.
+8. Calendar, contacts and To Do tasks have no MIME in Graph: `ecm plan-pim --ews <url> --client-id <id> --out reports/plan-pim.jsonl`
+   converts them to EWS XML and leaves out what the target holds (same UID, or same
+   start and subject). Apply it like any plan; no Graph sign-in is needed then.
+   `ecm target pim` lists the target calendar to check times.
