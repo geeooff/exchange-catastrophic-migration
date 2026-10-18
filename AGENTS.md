@@ -69,3 +69,5 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
   in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
   each Graph event again with `Prefer: outlook.timezone` in its own zone.
+- `GetInboxRules`/`UpdateInboxRules` answer without `ResponseMessages`. Graph returns
+  client-only Outlook rules (alerts) with `actions` and `conditions` null.

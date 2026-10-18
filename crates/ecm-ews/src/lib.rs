@@ -267,11 +267,19 @@ pub fn parse_response(status: u16, response: &[u8]) -> Result<Vec<ResponseMessag
         .children
         .first()
         .ok_or_else(|| Error::MalformedResponse("empty soap:Body".into()))?;
-    let messages = operation.child("ResponseMessages").ok_or_else(|| {
-        Error::MalformedResponse(format!("no ResponseMessages in {}", operation.name))
-    })?;
+    // Most operations answer a list of messages; a few (GetInboxRules,
+    // UpdateInboxRules) are the message themselves.
+    let messages: &[Element] = match operation.child("ResponseMessages") {
+        Some(messages) => &messages.children,
+        None if operation.attribute("ResponseClass").is_some() => std::slice::from_ref(operation),
+        None => {
+            return Err(Error::MalformedResponse(format!(
+                "no ResponseMessages in {}",
+                operation.name
+            )));
+        }
+    };
     Ok(messages
-        .children
         .iter()
         .map(|element| ResponseMessage {
             class: element

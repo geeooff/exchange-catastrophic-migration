@@ -55,6 +55,41 @@ impl<T: Transport> GraphClient<T> {
         Ok(folders)
     }
 
+    /// Inbox rules, in order. Needs the `MailboxSettings.Read` scope.
+    pub fn inbox_rules(&self) -> Result<Vec<Value>> {
+        let mut rules = self.get_all("/me/mailFolders/inbox/messageRules")?;
+        rules.sort_by_key(|rule| rule["sequence"].as_i64().unwrap_or(i64::MAX));
+        Ok(rules)
+    }
+
+    /// The path of a mail folder from the top of the mailbox (`/`-separated,
+    /// with `/` in names escaped as in [`ecm_model::path`]).
+    pub fn folder_path(&self, id: &str) -> Result<String> {
+        let top = self.get("/me/mailFolders/msgfolderroot?$select=id")?;
+        let top = top["id"].as_str().unwrap_or_default().to_owned();
+        let mut names = Vec::new();
+        let mut current = id.to_owned();
+        for _ in 0..32 {
+            let folder = self.get(&format!(
+                "/me/mailFolders/{}?$select=displayName,parentFolderId",
+                encode(&current)
+            ))?;
+            names.push(
+                folder["displayName"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
+            match folder["parentFolderId"].as_str() {
+                Some(parent) if parent != top && parent != current => current = parent.to_owned(),
+                _ => break,
+            }
+        }
+        Ok(names.iter().rev().fold(String::new(), |path, name| {
+            ecm_model::path::join(&path, name)
+        }))
+    }
+
     /// To Do lists.
     pub fn todo_lists(&self) -> Result<Vec<Value>> {
         self.get_all("/me/todo/lists?$top=100")
