@@ -42,6 +42,11 @@ journals each step and resumes where it stopped.
    message has a healthy copy in its folder. `ecm target show --id <id> --attachments`
    and `ecm target pim` inspect items, the calendar and the rules.
 
+When the source mailbox stays in use for other addresses, `ecm report-cleanup`
+sorts its messages into those to keep (they involve an address it keeps), those
+safe to delete (they involve the moved domain and the target has them) and those to
+look at, without changing anything: the deletion is yours, in that mailbox.
+
 `ecm fidelity-test` re-creates a few items in an `ecm-test` folder and compares them
 property by property with their reference.
 

@@ -7,6 +7,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::{Parser, Subcommand};
 
 mod audit_cmd;
+mod cleanup_cmd;
 mod fidelity_cmd;
 mod notes_cmd;
 mod pim_cmd;
@@ -246,6 +247,31 @@ enum Command {
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
+    },
+    /// Sort the messages of an Outlook.com mailbox into those to keep, those safe
+    /// to delete because the target has them, and those to look at, into
+    /// `outlook-cleanup.csv`. Only reads: the deletion is up to you, in
+    /// Outlook.com.
+    ReportCleanup {
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Work directory holding the target's `target.after.jsonl`.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// Domain that moved to the target, e.g. `example.com`.
+        #[arg(long, value_name = "DOMAIN")]
+        domain: String,
+        /// An address the Outlook.com mailbox keeps; repeat for each.
+        #[arg(long = "keep", value_name = "ADDRESS", required = true)]
+        keep: Vec<String>,
+        /// A sender domain whose mail went to the moved domain though it does not
+        /// show it (e.g. `github.com` notifications); repeat for each.
+        #[arg(long = "moved-sender", value_name = "DOMAIN")]
+        moved_senders: Vec<String>,
     },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
@@ -530,6 +556,20 @@ fn main() -> ExitCode {
             after,
             out,
         } => report(plan_cmd::park_command(&ews, &work, &after, &out)),
+        Command::ReportCleanup {
+            client_id,
+            tenant,
+            work,
+            domain,
+            keep,
+            moved_senders,
+        } => report(cleanup_cmd::report_cleanup_command(
+            &audit_cmd::GraphArgs { client_id, tenant },
+            &work,
+            &keep,
+            &domain,
+            &moved_senders,
+        )),
         Command::Verify {
             ews,
             work,
