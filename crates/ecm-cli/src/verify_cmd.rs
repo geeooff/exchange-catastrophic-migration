@@ -53,6 +53,16 @@ pub fn verify_command(
     for item in &mut source {
         item.folder = folders.target(&item.folder);
     }
+    // Mail the source received after the cutoff did not come through the
+    // migration (e.g. account notifications still sent to Outlook.com).
+    let before = source.len();
+    source.retain(|item| item.received.is_none_or(|received| received < cutoff));
+    if source.len() < before {
+        println!(
+            "{} source items received since the cutoff are not checked.",
+            before - source.len()
+        );
+    }
 
     let result = verify(&source, &target, cutoff);
     print_summary(&result, &source, &target);
