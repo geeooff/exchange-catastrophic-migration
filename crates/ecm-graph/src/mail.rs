@@ -112,6 +112,23 @@ impl<T: Transport> GraphClient<T> {
         Ok(folders)
     }
 
+    /// Who each message of a folder came from and went to: sender, recipients,
+    /// and the delivery addresses its Internet headers name (`Delivered-To`,
+    /// `X-Original-To`, `Received: … for <…>`), which also cover blind copies
+    /// and mailing lists.
+    pub fn addressing(&self, folder: &GraphFolder) -> Result<Vec<Addressing>> {
+        let url = format!(
+            "/me/mailFolders/{}/messages?$top=100&$select={}",
+            encode(&folder.id),
+            "id,subject,internetMessageId,from,sender,toRecipients,ccRecipients,bccRecipients,sentDateTime,internetMessageHeaders"
+        );
+        Ok(self
+            .get_all(&url)?
+            .iter()
+            .map(|message| addressing(message, &folder.path))
+            .collect())
+    }
+
     /// Every message of a folder, with the properties an audit needs.
     pub fn inventory_messages(&self, folder: &GraphFolder) -> Result<Vec<ItemRecord>> {
         let url = format!(
@@ -221,6 +238,107 @@ pub fn message_properties(message: &Value) -> PropertyMap {
     map
 }
 
+/// A message's addresses, lower-cased.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressing {
+    /// Graph message id.
+    pub id: String,
+    /// Folder path.
+    pub folder: String,
+    /// Subject.
+    pub subject: Option<String>,
+    /// `Message-ID`.
+    pub message_id: Option<String>,
+    /// Sent, Unix seconds.
+    pub sent: Option<i64>,
+    /// `From` and `Sender`.
+    pub from: Vec<String>,
+    /// `To`, `Cc` and `Bcc`.
+    pub recipients: Vec<String>,
+    /// Delivery addresses from the Internet headers.
+    pub delivered_to: Vec<String>,
+}
+
+/// The e-mail addresses in a header value, lower-cased.
+pub fn addresses_in(text: &str) -> Vec<String> {
+    text.split(|c: char| c.is_whitespace() || "<>,;\"'()[]".contains(c))
+        .filter(|token| {
+            let mut parts = token.splitn(2, '@');
+            matches!((parts.next(), parts.next()), (Some(local), Some(domain)) if !local.is_empty() && domain.contains('.'))
+        })
+        .map(|token| token.trim_end_matches('.').to_lowercase())
+        .collect()
+}
+
+fn addressing(message: &Value, folder: &str) -> Addressing {
+    let address = |value: &Value| {
+        value["emailAddress"]["address"]
+            .as_str()
+            .map(|a| a.trim().to_lowercase())
+            .filter(|a| a.contains('@'))
+    };
+    let list = |name: &str| -> Vec<String> {
+        message[name]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(address)
+            .collect()
+    };
+    let mut from: Vec<String> = [&message["from"], &message["sender"]]
+        .into_iter()
+        .filter_map(address)
+        .collect();
+    from.dedup();
+    let mut recipients = list("toRecipients");
+    recipients.extend(list("ccRecipients"));
+    recipients.extend(list("bccRecipients"));
+    let mut delivered_to = Vec::new();
+    for header in message["internetMessageHeaders"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let name = header["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let value = header["value"].as_str().unwrap_or_default();
+        match name.as_str() {
+            "delivered-to"
+            | "x-original-to"
+            | "envelope-to"
+            | "x-envelope-to"
+            | "original-recipient"
+            | "x-ms-exchange-organization-originalenveloperecipients" => {
+                delivered_to.extend(addresses_in(value));
+            }
+            "received" => {
+                if let Some((_, rest)) = value.split_once(" for ") {
+                    delivered_to.extend(addresses_in(rest.split(';').next().unwrap_or(rest)));
+                }
+            }
+            _ => {}
+        }
+    }
+    delivered_to.sort();
+    delivered_to.dedup();
+    Addressing {
+        id: message["id"].as_str().unwrap_or_default().to_owned(),
+        folder: folder.to_owned(),
+        subject: message["subject"].as_str().map(str::to_owned),
+        message_id: message["internetMessageId"]
+            .as_str()
+            .map(|id| id.trim().to_owned()),
+        sent: message["sentDateTime"]
+            .as_str()
+            .and_then(|t| parse_utc(t.trim())),
+        from,
+        recipients,
+        delivered_to,
+    }
+}
+
 fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
     let text = |value: &Value| {
         value
@@ -283,6 +401,27 @@ fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
 #[cfg(test)]
 mod tests {
     use crate::{GraphClient, testing::FakeTransport};
+
+    #[test]
+    fn reads_senders_recipients_and_delivery_addresses() {
+        let message: serde_json::Value = serde_json::from_str(r#"{"id":"M","subject":"Hi","internetMessageId":"<1@x.test>",
+            "from":{"emailAddress":{"address":"News@List.test"}},"sender":{"emailAddress":{"address":"news@list.test"}},
+            "toRecipients":[{"emailAddress":{"address":"Members@List.test"}}],"ccRecipients":[],"bccRecipients":[],
+            "sentDateTime":"2019-11-14T10:00:00Z",
+            "internetMessageHeaders":[
+                {"name":"Received","value":"from mx.list.test by mx.example.test with ESMTP id 42 for <webmaster@example.test>; Thu, 14 Nov 2019 10:00:00 +0000"},
+                {"name":"X-Original-To","value":"Me@Example.test"},
+                {"name":"Subject","value":"to someone@else.test"}
+            ]}"#).unwrap();
+        let addressing = super::addressing(&message, "Inbox");
+        assert_eq!(addressing.from, ["news@list.test"]);
+        assert_eq!(addressing.recipients, ["members@list.test"]);
+        assert_eq!(
+            addressing.delivered_to,
+            ["me@example.test", "webmaster@example.test"]
+        );
+        assert_eq!(addressing.message_id.as_deref(), Some("<1@x.test>"));
+    }
 
     #[test]
     fn normalizes_message_properties() {
