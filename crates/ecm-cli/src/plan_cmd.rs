@@ -230,6 +230,9 @@ struct Runner<'a, T: ecm_ews::Transport> {
     graph_args: Option<&'a GraphArgs>,
     #[cfg(windows)]
     graph: Option<ecm_graph::GraphClient<ecm_graph::WinHttpTransport>>,
+    /// Renews the Graph access token without the user, when it expires.
+    #[cfg(windows)]
+    refresh_token: Option<String>,
     journal: fs::File,
     journal_path: PathBuf,
     done: HashMap<usize, JournalLine>,
@@ -265,6 +268,8 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
             graph_args,
             #[cfg(windows)]
             graph: None,
+            #[cfg(windows)]
+            refresh_token: None,
             journal,
             journal_path: journal_path.to_owned(),
             done,
@@ -415,7 +420,7 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
     ) -> Result<String, String> {
         let mime = match self.graph()?.mime(source) {
             Err(ecm_graph::Error::Graph { status: 401, .. }) => {
-                // The token expired during a long run: sign in again once.
+                // The token expired during a long run: renew it, or sign in again.
                 self.graph = None;
                 self.graph()?.mime(source)
             }
@@ -453,21 +458,28 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                 "this plan re-creates items from Outlook.com: add --outlook-com --client-id <id>",
             )?;
             let transport = ecm_graph::WinHttpTransport::default();
-            let token = ecm_graph::auth::sign_in(
-                &transport,
-                &args.client_id,
-                &args.tenant,
-                &mut |prompt| {
-                    eprintln!();
-                    eprintln!(
-                        "Sign in to Outlook.com: open {} and enter the code {}",
-                        prompt.verification_uri, prompt.user_code
-                    );
-                    eprintln!("(Waiting for you to sign in…)");
-                },
-            )
-            .map_err(|e| e.to_string())?;
-            self.graph = Some(ecm_graph::GraphClient::new(transport, token));
+            let renewed = self.refresh_token.take().and_then(|refresh| {
+                ecm_graph::auth::refresh(&transport, &args.client_id, &args.tenant, &refresh).ok()
+            });
+            let tokens = match renewed {
+                Some(tokens) => tokens,
+                None => ecm_graph::auth::sign_in_for_long_run(
+                    &transport,
+                    &args.client_id,
+                    &args.tenant,
+                    &mut |prompt| {
+                        eprintln!();
+                        eprintln!(
+                            "Sign in to Outlook.com: open {} and enter the code {}",
+                            prompt.verification_uri, prompt.user_code
+                        );
+                        eprintln!("(Waiting for you to sign in…)");
+                    },
+                )
+                .map_err(|e| e.to_string())?,
+            };
+            self.refresh_token = tokens.refresh;
+            self.graph = Some(ecm_graph::GraphClient::new(transport, tokens.access));
         }
         Ok(self.graph.as_ref().expect("just set"))
     }

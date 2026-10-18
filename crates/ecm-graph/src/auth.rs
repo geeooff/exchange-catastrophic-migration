@@ -9,9 +9,28 @@ use serde_json::Value;
 
 use crate::{Error, Result, Transport, encode};
 
-/// Read-only permissions asked for (`User.Read` for `/me`). `offline_access` is not
-/// requested: the token lives for one run only.
+/// Read-only permissions asked for (`User.Read` for `/me`).
 pub const SCOPES: &str = "Mail.Read Contacts.Read Calendars.Read Tasks.Read User.Read";
+
+/// [`SCOPES`] plus `offline_access`, for runs longer than an access token lives
+/// (about an hour). The refresh token stays in memory and dies with the run.
+pub const LONG_RUN_SCOPES: &str =
+    "Mail.Read Contacts.Read Calendars.Read Tasks.Read User.Read offline_access";
+
+/// Tokens from a sign-in. Kept in memory only, never written or logged.
+pub struct Tokens {
+    /// Bearer token for Graph requests.
+    pub access: String,
+    /// Token to get a new access token without the user, when `offline_access`
+    /// was asked for.
+    pub refresh: Option<String>,
+}
+
+impl std::fmt::Debug for Tokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Tokens { .. }")
+    }
+}
 
 /// What to show the user so they can sign in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +53,66 @@ pub fn sign_in<T: Transport>(
     tenant: &str,
     prompt: &mut dyn FnMut(&DeviceCodePrompt),
 ) -> Result<String> {
-    sign_in_with_sleep(transport, client_id, tenant, prompt, thread::sleep)
+    sign_in_with_sleep(transport, client_id, tenant, SCOPES, prompt, thread::sleep)
+        .map(|tokens| tokens.access)
+}
+
+/// Like [`sign_in`], but also asks for a refresh token ([`LONG_RUN_SCOPES`]), so
+/// that [`refresh`] can renew the access token during a long run.
+pub fn sign_in_for_long_run<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    prompt: &mut dyn FnMut(&DeviceCodePrompt),
+) -> Result<Tokens> {
+    sign_in_with_sleep(
+        transport,
+        client_id,
+        tenant,
+        LONG_RUN_SCOPES,
+        prompt,
+        thread::sleep,
+    )
+}
+
+/// Gets new tokens from a refresh token, without the user.
+pub fn refresh<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    refresh_token: &str,
+) -> Result<Tokens> {
+    let (status, token) = post_form(
+        transport,
+        &format!("{}/token", authority(tenant)),
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+            ("scope", LONG_RUN_SCOPES),
+        ],
+    )?;
+    if status != 200 {
+        return Err(Error::SignIn(describe(&token)));
+    }
+    tokens(&token)
+}
+
+fn authority(tenant: &str) -> String {
+    format!(
+        "https://login.microsoftonline.com/{}/oauth2/v2.0",
+        encode(tenant)
+    )
+}
+
+fn tokens(token: &Value) -> Result<Tokens> {
+    Ok(Tokens {
+        access: token["access_token"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| Error::MalformedResponse("no access_token".into()))?,
+        refresh: token["refresh_token"].as_str().map(str::to_owned),
+    })
 }
 
 fn post_form<T: Transport>(
@@ -66,17 +144,15 @@ pub(crate) fn sign_in_with_sleep<T: Transport>(
     transport: &T,
     client_id: &str,
     tenant: &str,
+    scopes: &str,
     prompt: &mut dyn FnMut(&DeviceCodePrompt),
     sleep: fn(Duration),
-) -> Result<String> {
-    let base = format!(
-        "https://login.microsoftonline.com/{}/oauth2/v2.0",
-        encode(tenant)
-    );
+) -> Result<Tokens> {
+    let base = authority(tenant);
     let (status, code) = post_form(
         transport,
         &format!("{base}/devicecode"),
-        &[("client_id", client_id), ("scope", SCOPES)],
+        &[("client_id", client_id), ("scope", scopes)],
     )?;
     if status != 200 {
         return Err(Error::SignIn(describe(&code)));
@@ -104,10 +180,7 @@ pub(crate) fn sign_in_with_sleep<T: Transport>(
             ],
         )?;
         if status == 200 {
-            return token["access_token"]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| Error::MalformedResponse("no access_token".into()));
+            return tokens(&token);
         }
         match token["error"].as_str() {
             Some("authorization_pending") if Instant::now() < deadline => {}
@@ -135,7 +208,7 @@ fn describe(response: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceCodePrompt, sign_in_with_sleep};
+    use super::{DeviceCodePrompt, LONG_RUN_SCOPES, SCOPES, refresh, sign_in_with_sleep};
     use crate::testing::FakeTransport;
 
     const CODE: &str = r#"{"device_code":"DC","user_code":"ABCD-EFGH","verification_uri":"https://www.microsoft.com/link","expires_in":900,"interval":5,"message":"To sign in, open https://www.microsoft.com/link and enter ABCD-EFGH."}"#;
@@ -156,11 +229,13 @@ mod tests {
             &&fake,
             "CLIENT",
             "consumers",
+            SCOPES,
             &mut |p| shown = Some(p.clone()),
             |_| {},
         )
         .unwrap();
-        assert_eq!(token, "TOKEN");
+        assert_eq!(token.access, "TOKEN");
+        assert!(token.refresh.is_none());
         assert_eq!(
             shown.unwrap(),
             DeviceCodePrompt {
@@ -189,7 +264,8 @@ mod tests {
             (200, CODE.into()),
             (400, r#"{"error":"access_denied","error_description":"AADSTS70000: The user denied.\r\nTrace ID: x"}"#.into()),
         ]);
-        let error = sign_in_with_sleep(&&fake, "C", "consumers", &mut |_| {}, |_| {}).unwrap_err();
+        let error =
+            sign_in_with_sleep(&&fake, "C", "consumers", SCOPES, &mut |_| {}, |_| {}).unwrap_err();
         assert_eq!(
             error.to_string(),
             "sign-in failed: access_denied: AADSTS70000: The user denied."
@@ -204,8 +280,52 @@ mod tests {
         )]);
         let mut prompted = false;
         assert!(
-            sign_in_with_sleep(&&fake, "C", "consumers", &mut |_| prompted = true, |_| {}).is_err()
+            sign_in_with_sleep(
+                &&fake,
+                "C",
+                "consumers",
+                SCOPES,
+                &mut |_| prompted = true,
+                |_| {}
+            )
+            .is_err()
         );
         assert!(!prompted);
+    }
+
+    #[test]
+    fn a_long_run_sign_in_keeps_the_refresh_token_and_can_renew() {
+        let fake = FakeTransport::new([
+            (200, CODE.into()),
+            (
+                200,
+                r#"{"access_token":"A1","refresh_token":"R1","expires_in":3600}"#.into(),
+            ),
+            (
+                200,
+                r#"{"access_token":"A2","refresh_token":"R2","expires_in":3600}"#.into(),
+            ),
+        ]);
+        let first = sign_in_with_sleep(
+            &&fake,
+            "C",
+            "consumers",
+            LONG_RUN_SCOPES,
+            &mut |_| {},
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(first.refresh.as_deref(), Some("R1"));
+        let renewed = refresh(&&fake, "C", "consumers", "R1").unwrap();
+        assert_eq!(
+            (renewed.access.as_str(), renewed.refresh.as_deref()),
+            ("A2", Some("R2"))
+        );
+        let requests = fake.requests.borrow();
+        assert!(requests[0].2.contains("offline_access"));
+        assert!(
+            requests[2].2.contains("grant_type=refresh_token")
+                && requests[2].2.contains("refresh_token=R1")
+        );
     }
 }

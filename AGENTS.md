@@ -60,3 +60,6 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - Read-only probing from an OWA session: POST to `/owa/service.svc?action=X&EP=1`
   with the `X-OWA-CANARY` header (from the cookie) and the JSON body in
   `X-OWA-UrlPostData`. Opening a mail in OWA marks it read: avoid that.
+- EWS `CreateItem` from MIME answers `ErrorObjectTypeChanged` when Exchange turns the
+  MIME into another type (meeting request): retry as `t:Item`. Graph access tokens
+  last about an hour: long runs ask for `offline_access` and renew in memory.

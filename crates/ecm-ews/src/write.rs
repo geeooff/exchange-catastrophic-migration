@@ -149,8 +149,27 @@ impl<T: Transport> EwsClient<T> {
     /// Creates a message from its MIME content in a folder, setting `extended`
     /// properties in the same request (some, such as `PR_MESSAGE_FLAGS`, can only
     /// be set at creation). Returns the new item id.
+    ///
+    /// Exchange refuses to create a `Message` whose MIME it converts to another
+    /// type, such as a meeting request (`ErrorObjectTypeChanged`): the item is
+    /// then created as a generic `Item`, and Exchange keeps the type it chose.
     pub fn create_from_mime(
         &self,
+        folder_id: &str,
+        mime: &[u8],
+        extended: &[ExtendedValue],
+    ) -> Result<String> {
+        match self.create_from_mime_as("Message", folder_id, mime, extended) {
+            Err(Error::Response { code, .. }) if code == "ErrorObjectTypeChanged" => {
+                self.create_from_mime_as("Item", folder_id, mime, extended)
+            }
+            other => other,
+        }
+    }
+
+    fn create_from_mime_as(
+        &self,
+        element: &str,
         folder_id: &str,
         mime: &[u8],
         extended: &[ExtendedValue],
@@ -165,7 +184,7 @@ impl<T: Transport> EwsClient<T> {
             ));
         }
         let body = format!(
-            r#"<m:CreateItem MessageDisposition="SaveOnly"><m:SavedItemFolderId><t:FolderId Id="{}"/></m:SavedItemFolderId><m:Items><t:Message><t:MimeContent CharacterSet="UTF-8">{}</t:MimeContent>{properties}</t:Message></m:Items></m:CreateItem>"#,
+            r#"<m:CreateItem MessageDisposition="SaveOnly"><m:SavedItemFolderId><t:FolderId Id="{}"/></m:SavedItemFolderId><m:Items><t:{element}><t:MimeContent CharacterSet="UTF-8">{}</t:MimeContent>{properties}</t:{element}></m:Items></m:CreateItem>"#,
             escape(folder_id),
             base64::engine::general_purpose::STANDARD.encode(mime)
         );
@@ -220,6 +239,37 @@ mod tests {
             "<t:MimeContent CharacterSet=\"UTF-8\">U3ViamVjdDogeA0KDQpib2R5</t:MimeContent>"
         ));
         assert!(request.contains(r#"<t:ExtendedFieldURI PropertyTag="0x0E07" PropertyType="Integer"/><t:Value>1</t:Value>"#));
+    }
+
+    #[test]
+    fn retries_as_a_generic_item_when_exchange_changes_the_type() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                soap(
+                    r#"<m:CreateItemResponse><m:ResponseMessages><m:CreateItemResponseMessage ResponseClass="Error"><m:MessageText>Operation would change object type, which is not permitted.</m:MessageText><m:ResponseCode>ErrorObjectTypeChanged</m:ResponseCode></m:CreateItemResponseMessage></m:ResponseMessages></m:CreateItemResponse>"#,
+                ),
+            ),
+            (
+                200,
+                soap(
+                    r#"<m:CreateItemResponse><m:ResponseMessages><m:CreateItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:MeetingRequest><t:ItemId Id="NEW" ChangeKey="1"/></t:MeetingRequest></m:Items></m:CreateItemResponseMessage></m:ResponseMessages></m:CreateItemResponse>"#,
+                ),
+            ),
+        ]);
+        let id = EwsClient::new(&fake)
+            .create_from_mime(
+                "F",
+                b"Subject: x
+
+body",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(id, "NEW");
+        let requests = fake.requests.borrow();
+        assert!(requests[0].contains("<m:Items><t:Message><t:MimeContent"));
+        assert!(requests[1].contains("<m:Items><t:Item><t:MimeContent"));
     }
 
     #[test]
