@@ -97,6 +97,53 @@ fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
         .collect())
 }
 
+/// Ids of the items an applied plan created (re-created messages), from its
+/// journal.
+pub fn created_items(plan: &Path) -> Result<HashSet<String>, String> {
+    let actions = read_plan(plan)?;
+    let journal = read_journal(&journal_path(plan))?;
+    Ok(journal
+        .into_iter()
+        .filter(|(step, line)| {
+            line.status == "done"
+                && matches!(
+                    actions.get(*step),
+                    Some(Action::Recreate { .. } | Action::RecreateMime { .. })
+                )
+        })
+        .filter_map(|(_, line)| line.id)
+        .collect())
+}
+
+/// Properties a re-created message gets at creation: read state (which also
+/// clears the draft flag), receive and send times.
+fn creation_properties(
+    read: Option<bool>,
+    sent: Option<i64>,
+    received: Option<i64>,
+) -> Vec<ExtendedValue> {
+    let mut extended = vec![ExtendedValue {
+        tag: 0x0E07,
+        kind: "Integer",
+        value: if read == Some(true) { "1" } else { "0" }.into(),
+    }];
+    if let Some(received) = received {
+        extended.push(ExtendedValue {
+            tag: 0x0E06,
+            kind: "SystemTime",
+            value: format_iso(received),
+        });
+    }
+    if let Some(sent) = sent {
+        extended.push(ExtendedValue {
+            tag: 0x0039,
+            kind: "SystemTime",
+            value: format_iso(sent),
+        });
+    }
+    extended
+}
+
 /// The target's folder paths, and how source folders map to them.
 pub fn folder_map<T: ecm_ews::Transport>(
     client: &ecm_ews::EwsClient<T>,
@@ -396,6 +443,25 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                     .create_item(&folder, item)
                     .map_err(|e| e.to_string())
             }),
+            Action::RecreateMime {
+                to,
+                read,
+                sent,
+                received,
+                mime,
+                ..
+            } => {
+                use base64::Engine as _;
+                let mime = base64::engine::general_purpose::STANDARD
+                    .decode(mime)
+                    .map_err(|e| e.to_string());
+                let extended = creation_properties(*read, *sent, *received);
+                self.folder_id(to).and_then(|folder| {
+                    self.client
+                        .create_from_mime(&folder, &mime?, &extended)
+                        .map_err(|e| e.to_string())
+                })
+            }
             Action::ContactPhoto { item, photo, .. } => {
                 use base64::Engine as _;
                 base64::engine::general_purpose::STANDARD
@@ -480,25 +546,7 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
             other => other,
         }
         .map_err(|e| e.to_string())?;
-        let mut extended = vec![ExtendedValue {
-            tag: 0x0E07,
-            kind: "Integer",
-            value: if read == Some(true) { "1" } else { "0" }.into(),
-        }];
-        if let Some(received) = received {
-            extended.push(ExtendedValue {
-                tag: 0x0E06,
-                kind: "SystemTime",
-                value: format_iso(received),
-            });
-        }
-        if let Some(sent) = sent {
-            extended.push(ExtendedValue {
-                tag: 0x0039,
-                kind: "SystemTime",
-                value: format_iso(sent),
-            });
-        }
+        let extended = creation_properties(read, sent, received);
         self.client
             .create_from_mime(folder, &mime, &extended)
             .map_err(|e| e.to_string())
