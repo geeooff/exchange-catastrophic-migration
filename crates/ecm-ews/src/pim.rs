@@ -30,6 +30,8 @@ pub struct ContactBrief {
     pub display_name: Option<String>,
     /// First e-mail address, lower-cased.
     pub email: Option<String>,
+    /// Whether it has a photo.
+    pub has_picture: bool,
 }
 
 impl<T: Transport> EwsClient<T> {
@@ -50,7 +52,7 @@ impl<T: Transport> EwsClient<T> {
 
     /// Contacts of a folder.
     pub fn contact_briefs(&self, folder_id: &str) -> Result<Vec<ContactBrief>> {
-        let fields = r#"<t:FieldURI FieldURI="contacts:DisplayName"/><t:IndexedFieldURI FieldURI="contacts:EmailAddress" FieldIndex="EmailAddress1"/>"#;
+        let fields = r#"<t:FieldURI FieldURI="contacts:DisplayName"/><t:FieldURI FieldURI="contacts:HasPicture"/><t:IndexedFieldURI FieldURI="contacts:EmailAddress" FieldIndex="EmailAddress1"/>"#;
         Ok(self
             .find_all(folder_id, fields)?
             .iter()
@@ -61,8 +63,27 @@ impl<T: Transport> EwsClient<T> {
                     .path(&["EmailAddresses", "Entry"])
                     .map(|entry| entry.text.trim().to_lowercase())
                     .filter(|address| !address.is_empty()),
+                has_picture: text(item, "HasPicture")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true")),
             })
             .collect())
+    }
+
+    /// Sets a contact's photo, as the `ContactPicture.jpg` attachment Exchange
+    /// and Outlook use for it.
+    pub fn attach_contact_photo(&self, contact_id: &str, photo: &[u8]) -> Result<()> {
+        use base64::Engine as _;
+        let body = format!(
+            r#"<m:CreateAttachment><m:ParentItemId Id="{}"/><m:Attachments><t:FileAttachment><t:Name>ContactPicture.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:IsContactPhoto>true</t:IsContactPhoto><t:Content>{}</t:Content></t:FileAttachment></m:Attachments></m:CreateAttachment>"#,
+            escape(contact_id),
+            base64::engine::general_purpose::STANDARD.encode(photo)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("CreateAttachment returned no message".into()))?
+            .into_result()
+            .map(|_| ())
     }
 
     fn find_all(&self, folder_id: &str, fields: &str) -> Result<Vec<Element>> {
@@ -130,7 +151,7 @@ mod tests {
             (
                 200,
                 soap(
-                    r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true"><t:Items><t:Contact><t:ItemId Id="C1"/><t:DisplayName>Ann</t:DisplayName><t:EmailAddresses><t:Entry Key="EmailAddress1">Ann@Example.TEST</t:Entry></t:EmailAddresses></t:Contact></t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#,
+                    r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true"><t:Items><t:Contact><t:ItemId Id="C1"/><t:DisplayName>Ann</t:DisplayName><t:HasPicture>false</t:HasPicture><t:EmailAddresses><t:Entry Key="EmailAddress1">Ann@Example.TEST</t:Entry></t:EmailAddresses></t:Contact></t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#,
                 ),
             ),
         ]);
@@ -144,5 +165,20 @@ mod tests {
         let contacts = client.contact_briefs("CON").unwrap();
         assert_eq!(contacts[0].email.as_deref(), Some("ann@example.test"));
         assert_eq!(contacts[0].display_name.as_deref(), Some("Ann"));
+        assert!(!contacts[0].has_picture);
+    }
+
+    #[test]
+    fn attaches_a_contact_photo() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:CreateAttachmentResponse><m:ResponseMessages><m:CreateAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="A1"/></t:FileAttachment></m:Attachments></m:CreateAttachmentResponseMessage></m:ResponseMessages></m:CreateAttachmentResponse>"#,
+            ),
+        )]);
+        EwsClient::new(&fake)
+            .attach_contact_photo("C1", &[0xFF, 0xD8, 0xFF])
+            .unwrap();
+        assert!(fake.requests.borrow()[0].contains(r#"<m:ParentItemId Id="C1"/><m:Attachments><t:FileAttachment><t:Name>ContactPicture.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:IsContactPhoto>true</t:IsContactPhoto><t:Content>/9j/</t:Content>"#));
     }
 }

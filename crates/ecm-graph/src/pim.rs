@@ -24,6 +24,15 @@ impl<T: Transport> GraphClient<T> {
         self.get_all("/me/contacts?$top=100")
     }
 
+    /// A contact's photo, or `None` when it has none.
+    pub fn contact_photo(&self, id: &str) -> Result<Option<Vec<u8>>> {
+        match self.get_raw(&format!("/me/contacts/{}/photo/$value", encode(id))) {
+            Ok(bytes) if !bytes.is_empty() => Ok(Some(bytes)),
+            Ok(_) | Err(crate::Error::Graph { status: 404, .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Contact folders under the default one, with how many contacts each holds.
     pub fn contact_folders(&self) -> Result<Vec<(String, usize)>> {
         let mut folders = Vec::new();
@@ -63,6 +72,25 @@ impl<T: Transport> GraphClient<T> {
 #[cfg(test)]
 mod tests {
     use crate::{GraphClient, testing::FakeTransport};
+
+    #[test]
+    fn a_contact_without_photo_has_none() {
+        let fake = FakeTransport::new([
+            (
+                404,
+                r#"{"error":{"code":"ErrorItemNotFound","message":"The photo wasn't found."}}"#
+                    .into(),
+            ),
+            (200, "JPEG".into()),
+        ]);
+        let client = GraphClient::new(&fake, "T".into()).with_sleep(|_| {});
+        assert_eq!(client.contact_photo("C1").unwrap(), None);
+        assert_eq!(client.contact_photo("C2").unwrap(), Some(b"JPEG".to_vec()));
+        assert_eq!(
+            fake.requests.borrow()[0].1,
+            "https://graph.microsoft.com/v1.0/me/contacts/C1/photo/$value"
+        );
+    }
 
     #[test]
     fn asks_for_local_times_when_reading_one_event() {

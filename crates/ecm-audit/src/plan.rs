@@ -96,6 +96,15 @@ pub enum Action {
         /// The item, as EWS XML (`<t:CalendarItem>`, `<t:Contact>`, `<t:Task>`).
         item: String,
     },
+    /// Set the photo of a target contact.
+    ContactPhoto {
+        /// Target contact id.
+        item: String,
+        /// Contact name, for reports.
+        subject: Option<String>,
+        /// The photo, base64.
+        photo: String,
+    },
 }
 
 impl Action {
@@ -114,6 +123,7 @@ impl Action {
                 "task" => "create-task",
                 _ => "create",
             },
+            Action::ContactPhoto { .. } => "contact-photo",
         }
     }
 }
