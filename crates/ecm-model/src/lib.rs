@@ -6,6 +6,7 @@
 
 pub mod compare;
 pub mod item;
+pub mod path;
 
 pub use item::ItemRecord;
 

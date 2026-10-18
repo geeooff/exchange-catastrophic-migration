@@ -173,7 +173,7 @@ property.
 | M2 ✅ | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
 | M3 (messages ✅) | Spike: re-upload fidelity, in a dedicated `ecm-test` folder (`ecm fidelity-test`). Done for messages: backup → `UploadItems` and Outlook.com MIME → `CreateItem` match their reference on every compared property. Still to do: PST messages (no MIME in a PST), appointments, contacts, tasks | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
 | M4 ✅ | `inventory` + `audit` | CSV report with classes and defects; tested on synthetic damaged mailboxes |
-| M5 | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
+| M5 (code ✅) | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
 | M6 | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
 | M7 | Exchange (EWS) as a source | Same results as with a PST of the same mailbox |
 | M7b | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
@@ -203,6 +203,11 @@ property.
 - Migrations can also empty bodies and duplicate recipients: in a real test, damaged
   copies had a zero-length body or every recipient listed twice, while the copy
   re-created from the source was faithful.
+- Folder names can contain `/` ("Commandes / Factures"): paths escape it as `\/`
+  (`ecm_model::path`), so a name is never split into two folders.
+- Only items at the top of the target mailbox, where the migration dumped its
+  copies, are ever moved. Items in real folders were delivered or filed by the user
+  and are left alone, together with the source items they serve.
 - A PST export can be incomplete. On a real mailbox, about 3,000 sent items existed
   only as damaged copies on the target. Items with no source match are therefore
   never quarantined by default: they are reported as `unmatched` for review.

@@ -90,11 +90,7 @@ impl<T: Transport> GraphClient<T> {
                 .ok_or_else(|| Error::MalformedResponse("folder without id".into()))?
                 .to_owned();
             let name = value["displayName"].as_str().unwrap_or_default().to_owned();
-            let path = if parent_path.is_empty() {
-                name.clone()
-            } else {
-                format!("{parent_path}/{name}")
-            };
+            let path = ecm_model::path::join(parent_path, &name);
             let children = if value["childFolderCount"].as_u64().unwrap_or(0) > 0 {
                 self.child_folders(
                     &format!("/me/mailFolders/{}/childFolders", encode(&id)),

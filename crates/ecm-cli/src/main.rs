@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_cmd;
 mod fidelity_cmd;
+mod plan_cmd;
 use ecm_model::FolderSummary;
 
 /// Audit and repair an Exchange mailbox after a botched migration.
@@ -103,10 +104,48 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         count: usize,
     },
-    /// Write a reviewable plan of repair actions.
-    Plan,
-    /// Run a reviewed plan, journaled and resumable.
-    Apply,
+    /// Write a reviewable plan of repair actions (JSON Lines). Only reads.
+    Plan {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the inventories.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// Which source inventory to rebuild the target from.
+        #[arg(long, value_enum, default_value = "outlook")]
+        source: audit_cmd::SourceKind,
+        /// First day real mail reached the target, `YYYY-MM-DD` (UTC).
+        #[arg(long, value_name = "DATE")]
+        cutoff: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
+    /// Run a reviewed plan, journaled and resumable. Only creates folders and
+    /// items and moves items; nothing is deleted.
+    Apply {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Plan file written by `ecm plan`.
+        #[arg(long, value_name = "FILE")]
+        plan: PathBuf,
+        /// Re-create items from Outlook.com (needed when the plan has
+        /// `recreate` steps).
+        #[arg(long, requires = "client_id")]
+        outlook_com: bool,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: Option<String>,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Run at most this many pending steps, then stop.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+        /// Only say what is left to do.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Inventory again and compare, after `apply`.
     Verify,
     /// Manage the quarantine folder.
@@ -219,6 +258,31 @@ fn main() -> ExitCode {
                 .map(|client_id| audit_cmd::GraphArgs { client_id, tenant })
                 .as_ref(),
             count,
+        )),
+        Command::Plan {
+            ews,
+            work,
+            source,
+            cutoff,
+            out,
+        } => report(plan_cmd::plan_command(&work, source, &cutoff, &ews, &out)),
+        Command::Apply {
+            ews,
+            plan,
+            outlook_com,
+            client_id,
+            tenant,
+            limit,
+            dry_run,
+        } => report(plan_cmd::apply_command(
+            &plan,
+            &ews,
+            client_id
+                .filter(|_| outlook_com)
+                .map(|client_id| audit_cmd::GraphArgs { client_id, tenant })
+                .as_ref(),
+            limit,
+            dry_run,
         )),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");

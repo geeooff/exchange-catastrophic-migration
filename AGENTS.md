@@ -22,8 +22,9 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   for writing. Use `ecm_pst::PstSource`, which opens the file read-only and shares
   read access only.
 - On a target: no hard delete (quarantine instead), and changes only through
-  `plan`/`apply`. The single exception is `ecm fidelity-test`, which only creates items,
-  only in the `ecm-test` folder.
+  `plan`/`apply`, with the user's go-ahead for each `apply` run. The single exception
+  is `ecm fidelity-test`, which only creates items, only in the `ecm-test` folder.
+- Plans only move items from the top of the target mailbox (migration debris).
 - Never track mailbox data or private notes. Exceptions: fixtures under
   `crates/*/tests/fixtures/`, each named in that folder's `README.md`. Private notes and
   config go in `*.local.*` files, which are gitignored.
