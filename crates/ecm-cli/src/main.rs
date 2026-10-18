@@ -143,6 +143,22 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
     },
+    /// Write a plan that gives the target's contacts the photos their
+    /// Outlook.com counterparts have (matched by e-mail address, then name).
+    /// Only reads.
+    PlanContactPhotos {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
     Apply {
@@ -367,6 +383,16 @@ fn main() -> ExitCode {
             &audit_cmd::GraphArgs { client_id, tenant },
             &out,
         )),
+        Command::PlanContactPhotos {
+            ews,
+            client_id,
+            tenant,
+            out,
+        } => report(pim_cmd::plan_contact_photos_command(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            &out,
+        )),
         Command::Verify {
             ews,
             work,
@@ -425,7 +451,11 @@ fn target_pim(ews: &EwsArgs) -> Result<(), String> {
     let contacts = client
         .contact_briefs(&contacts.id)
         .map_err(|e| e.to_string())?;
-    println!("Contacts: {} items", contacts.len());
+    println!(
+        "Contacts: {} items, {} with a photo",
+        contacts.len(),
+        contacts.iter().filter(|c| c.has_picture).count()
+    );
     Ok(())
 }
 

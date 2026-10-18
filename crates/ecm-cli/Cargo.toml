@@ -13,6 +13,7 @@ name = "ecm"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 ecm-audit.workspace = true
 ecm-ews.workspace = true

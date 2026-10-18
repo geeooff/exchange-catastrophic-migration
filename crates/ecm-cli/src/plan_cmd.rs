@@ -396,6 +396,18 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                     .create_item(&folder, item)
                     .map_err(|e| e.to_string())
             }),
+            Action::ContactPhoto { item, photo, .. } => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(photo)
+                    .map_err(|e| e.to_string())
+                    .and_then(|photo| {
+                        self.client
+                            .attach_contact_photo(item, &photo)
+                            .map(|()| item.clone())
+                            .map_err(|e| e.to_string())
+                    })
+            }
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)

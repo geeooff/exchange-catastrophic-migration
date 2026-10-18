@@ -27,3 +27,4 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
    converts them to EWS XML and leaves out what the target holds (same UID, or same
    start and subject). Apply it like any plan; no Graph sign-in is needed then.
    `ecm target pim` lists the target calendar to check times.
+9. Contact photos: `ecm plan-contact-photos --ews <url> --client-id <id> --out reports/plan-photos.jsonl`, then apply. It matches contacts by e-mail, then name, and skips those that already have a photo.

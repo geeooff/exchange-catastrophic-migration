@@ -43,18 +43,7 @@ pub fn plan_pim_command(ews: &EwsArgs, graph: &GraphArgs, out: &Path) -> Result<
     let (contacts_id, contacts_path) = folder("contacts")?;
     let (_, tasks_path) = folder("tasks")?;
 
-    let transport = ecm_graph::WinHttpTransport::default();
-    let token =
-        ecm_graph::auth::sign_in(&transport, &graph.client_id, &graph.tenant, &mut |prompt| {
-            eprintln!();
-            eprintln!(
-                "Sign in to Outlook.com: open {} and enter the code {}",
-                prompt.verification_uri, prompt.user_code
-            );
-            eprintln!("(Waiting for you to sign in…)");
-        })
-        .map_err(|e| e.to_string())?;
-    let graph = ecm_graph::GraphClient::new(transport, token);
+    let graph = sign_in(graph)?;
     let mut actions = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
 
@@ -176,6 +165,104 @@ pub fn plan_pim_command(ews: &EwsArgs, graph: &GraphArgs, out: &Path) -> Result<
         out.display()
     );
     Ok(())
+}
+
+/// Writes a plan that sets, on the target's contacts without a photo, the photo
+/// of their Outlook.com counterpart. Only reads both mailboxes.
+#[cfg(windows)]
+pub fn plan_contact_photos_command(
+    ews: &EwsArgs,
+    graph: &GraphArgs,
+    out: &Path,
+) -> Result<(), String> {
+    use base64::Engine as _;
+
+    let client = connect(ews)?;
+    let folder = client
+        .get_distinguished_folder("contacts")
+        .map_err(|e| e.to_string())?;
+    let targets = client
+        .contact_briefs(&folder.id)
+        .map_err(|e| e.to_string())?;
+    let graph = sign_in(graph)?;
+
+    let mut actions = Vec::new();
+    let mut unmatched = 0;
+    let mut with_photo = 0;
+    for contact in graph.contacts().map_err(|e| e.to_string())? {
+        let Some(id) = contact["id"].as_str() else {
+            continue;
+        };
+        let Some(photo) = graph.contact_photo(id).map_err(|e| e.to_string())? else {
+            continue;
+        };
+        with_photo += 1;
+        let name = contact["displayName"].as_str().map(str::to_lowercase);
+        let emails: Vec<String> = contact["emailAddresses"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e["address"].as_str())
+            .map(str::to_lowercase)
+            .collect();
+        let target = targets
+            .iter()
+            .find(|t| t.email.as_ref().is_some_and(|e| emails.contains(e)))
+            .or_else(|| {
+                targets.iter().find(|t| {
+                    name.is_some() && t.display_name.as_deref().map(str::to_lowercase) == name
+                })
+            });
+        match target {
+            Some(target) if target.has_picture => {}
+            Some(target) => actions.push(Action::ContactPhoto {
+                item: target.id.clone(),
+                subject: contact["displayName"].as_str().map(str::to_owned),
+                photo: base64::engine::general_purpose::STANDARD.encode(photo),
+            }),
+            None => unmatched += 1,
+        }
+    }
+
+    let mut text = String::new();
+    for action in &actions {
+        text.push_str(&serde_json::to_string(action).map_err(|e| e.to_string())?);
+        text.push('\n');
+    }
+    fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!(
+        "{with_photo} Outlook.com contacts have a photo. Plan: {} photos to set into {} ({unmatched} contacts not found in the target).",
+        actions.len(),
+        out.display()
+    );
+    println!(
+        "Nothing was changed. Review the plan, then run `ecm apply --plan {} --dry-run`.",
+        out.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn plan_contact_photos_command(_: &EwsArgs, _: &GraphArgs, _: &Path) -> Result<(), String> {
+    Err("Microsoft Graph access needs Windows for now (WinHTTP)".into())
+}
+
+#[cfg(windows)]
+fn sign_in(
+    graph: &GraphArgs,
+) -> Result<ecm_graph::GraphClient<ecm_graph::WinHttpTransport>, String> {
+    let transport = ecm_graph::WinHttpTransport::default();
+    let token =
+        ecm_graph::auth::sign_in(&transport, &graph.client_id, &graph.tenant, &mut |prompt| {
+            eprintln!();
+            eprintln!(
+                "Sign in to Outlook.com: open {} and enter the code {}",
+                prompt.verification_uri, prompt.user_code
+            );
+            eprintln!("(Waiting for you to sign in…)");
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(ecm_graph::GraphClient::new(transport, token))
 }
 
 #[cfg(not(windows))]

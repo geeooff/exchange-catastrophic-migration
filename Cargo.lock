@@ -179,6 +179,7 @@ dependencies = [
 name = "ecm-cli"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "clap",
  "ecm-audit",
  "ecm-ews",
