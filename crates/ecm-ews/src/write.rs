@@ -1,8 +1,9 @@
-//! Operations that change a mailbox: creating a folder and creating items.
+//! Operations that change a mailbox: creating folders, creating items and moving
+//! items.
 //!
-//! Nothing here moves, updates or deletes an existing item. These operations are
-//! used by `ecm fidelity-test`, inside a dedicated test folder, and later by
-//! `apply`, which only runs reviewed plans.
+//! Nothing here updates or deletes an existing item. These operations are used by
+//! `ecm fidelity-test`, inside a dedicated test folder, and by `ecm apply`, which
+//! only runs reviewed plans.
 
 use base64::Engine as _;
 
@@ -49,6 +50,64 @@ impl<T: Transport> EwsClient<T> {
             .and_then(|id| id.attribute("Id"))
             .map(str::to_owned)
             .ok_or_else(|| Error::MalformedResponse("CreateFolder returned no folder id".into()))
+    }
+
+    /// Creates a mail folder `name` under the folder `parent_id` and returns its id.
+    pub fn create_folder(&self, parent_id: &str, name: &str) -> Result<String> {
+        let body = format!(
+            r#"<m:CreateFolder><m:ParentFolderId><t:FolderId Id="{}"/></m:ParentFolderId><m:Folders><t:Folder><t:FolderClass>IPF.Note</t:FolderClass><t:DisplayName>{}</t:DisplayName></t:Folder></m:Folders></m:CreateFolder>"#,
+            escape(parent_id),
+            escape(name)
+        );
+        let message = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("CreateFolder returned no message".into()))?
+            .into_result()?;
+        message
+            .element
+            .child("Folders")
+            .and_then(|folders| folders.children.first())
+            .and_then(|folder| folder.child("FolderId"))
+            .and_then(|id| id.attribute("Id"))
+            .map(str::to_owned)
+            .ok_or_else(|| Error::MalformedResponse("CreateFolder returned no folder id".into()))
+    }
+
+    /// Moves items to a folder. Nothing is deleted. Returns, per item, its new id
+    /// (a moved item gets a new id) or the error.
+    pub fn move_items(&self, ids: &[&str], folder_id: &str) -> Result<Vec<Result<String>>> {
+        let mut body = format!(
+            r#"<m:MoveItem><m:ToFolderId><t:FolderId Id="{}"/></m:ToFolderId><m:ItemIds>"#,
+            escape(folder_id)
+        );
+        for id in ids {
+            body.push_str(&format!(r#"<t:ItemId Id="{}"/>"#, escape(id)));
+        }
+        body.push_str("</m:ItemIds><m:ReturnNewItemIds>true</m:ReturnNewItemIds></m:MoveItem>");
+        let messages = self.call(&body)?;
+        if messages.len() != ids.len() {
+            return Err(Error::MalformedResponse(format!(
+                "MoveItem answered {} messages for {} items",
+                messages.len(),
+                ids.len()
+            )));
+        }
+        Ok(messages
+            .into_iter()
+            .map(|message| {
+                let message = message.into_result()?;
+                Ok(message
+                    .element
+                    .child("Items")
+                    .and_then(|items| items.children.first())
+                    .and_then(|item| item.child("ItemId"))
+                    .and_then(|id| id.attribute("Id"))
+                    .unwrap_or_default()
+                    .to_owned())
+            })
+            .collect())
     }
 
     /// Restores exported items (`ExportItems` data) as new items in a folder, with
@@ -161,6 +220,21 @@ mod tests {
             "<t:MimeContent CharacterSet=\"UTF-8\">U3ViamVjdDogeA0KDQpib2R5</t:MimeContent>"
         ));
         assert!(request.contains(r#"<t:ExtendedFieldURI PropertyTag="0x0E07" PropertyType="Integer"/><t:Value>1</t:Value>"#));
+    }
+
+    #[test]
+    fn moves_items_and_reports_each_result() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:MoveItemResponse><m:ResponseMessages><m:MoveItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:Message><t:ItemId Id="NEW1" ChangeKey="2"/></t:Message></m:Items></m:MoveItemResponseMessage><m:MoveItemResponseMessage ResponseClass="Error"><m:MessageText>The specified object was not found in the store.</m:MessageText><m:ResponseCode>ErrorItemNotFound</m:ResponseCode></m:MoveItemResponseMessage></m:ResponseMessages></m:MoveItemResponse>"#,
+            ),
+        )]);
+        let results = EwsClient::new(&fake).move_items(&["A", "B"], "Q").unwrap();
+        assert_eq!(results[0].as_deref().unwrap(), "NEW1");
+        assert!(results[1].is_err());
+        let request = &fake.requests.borrow()[0];
+        assert!(request.contains(r#"<m:MoveItem><m:ToFolderId><t:FolderId Id="Q"/></m:ToFolderId><m:ItemIds><t:ItemId Id="A"/><t:ItemId Id="B"/></m:ItemIds>"#));
     }
 
     #[test]

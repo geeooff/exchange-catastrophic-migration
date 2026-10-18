@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod plan;
+
 use std::collections::HashMap;
 
 use ecm_model::ItemRecord;
@@ -94,7 +96,7 @@ pub enum TargetRole {
         /// Index of the source item.
         source: usize,
     },
-    /// No source item: received after the cutoff, so new mail to keep.
+    /// No source item, received after the cutoff into a folder: new mail to keep.
     New,
     /// No source item, received before the cutoff: to review.
     Unmatched,
@@ -257,7 +259,9 @@ pub fn audit(source: &[ItemRecord], target: &[ItemRecord], cutoff: i64) -> Audit
     let mut target_roles: Vec<TargetRole> = target
         .iter()
         .map(|item| {
-            if item.received.is_some_and(|received| received >= cutoff) {
+            // New mail is delivered into a folder, never into the top of the
+            // mailbox, where only a migration puts items.
+            if !item.folder.is_empty() && item.received.is_some_and(|received| received >= cutoff) {
                 TargetRole::New
             } else {
                 TargetRole::Unmatched
@@ -364,6 +368,13 @@ mod tests {
         );
         assert_eq!(audit.target_roles[5], TargetRole::New);
         assert_eq!(audit.target_roles[6], TargetRole::Unmatched);
+    }
+
+    #[test]
+    fn migration_debris_at_the_top_is_not_new_mail() {
+        let debris = message("t1", "", "<x>", CUTOFF + 10);
+        let audit = audit(&[], &[debris], CUTOFF);
+        assert_eq!(audit.target_roles[0], TargetRole::Unmatched);
     }
 
     #[test]

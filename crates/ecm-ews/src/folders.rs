@@ -199,11 +199,7 @@ fn collect_paths<'a>(
 ) {
     out.push((path.clone(), folder));
     for child in children.get(folder.id.as_str()).into_iter().flatten() {
-        let child_path = if path.is_empty() {
-            child.name.clone()
-        } else {
-            format!("{path}/{}", child.name)
-        };
+        let child_path = ecm_model::path::join(&path, &child.name);
         collect_paths(child, child_path, children, out);
     }
 }

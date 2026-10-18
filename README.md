@@ -20,9 +20,12 @@ arrived after the migration.
 >   what is ok, misplaced, damaged, missing, duplicated, new or unmatched (CSV).
 > - `ecm inventory --outlook-com --client-id <id>`: an Outlook.com mailbox as a second
 >   source, read through Microsoft Graph after a browser sign-in (`ecm audit --source outlook`).
+> - `ecm plan` and `ecm apply`: a reviewable plan (create folders, re-create damaged
+>   or missing messages from Outlook.com, move misplaced ones, move duplicates and
+>   damaged copies to a quarantine folder), applied in journaled, resumable steps.
+>   Nothing is deleted.
 > - `ecm fidelity-test`: re-creates a few items in an `ecm-test` folder (from a backup and
->   from Outlook.com) and compares them property by property. It is the only command that
->   writes, and only into that folder.
+>   from Outlook.com) and compares them property by property. It writes only into that folder.
 >
 > See [docs/plan.md](docs/plan.md).
 

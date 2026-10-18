@@ -371,11 +371,7 @@ impl PstSource {
         }
         children.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, entry_id) in children {
-            let child_path = if path.is_empty() {
-                name
-            } else {
-                format!("{path}/{name}")
-            };
+            let child_path = ecm_model::path::join(&path, &name);
             self.collect_items(&entry_id, child_path, items, errors, on_folder)?;
         }
         Ok(())

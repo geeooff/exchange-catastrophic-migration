@@ -171,6 +171,8 @@ name = "ecm-audit"
 version = "0.0.0"
 dependencies = [
  "ecm-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -185,6 +187,7 @@ dependencies = [
  "ecm-model",
  "ecm-pst",
  "ecm-store",
+ "serde",
  "serde_json",
 ]
 
