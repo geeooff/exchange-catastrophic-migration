@@ -29,9 +29,11 @@ $zipName = "ecm-$version-windows-x64.zip"
 $zip = Join-Path $dist $zipName
 if (-not (Test-Path $zip)) { throw "$zip is missing; run scripts\build.ps1 release first" }
 
-# Checksums, in the shape sha256sum reads back.
+# Checksums, in the shape sha256sum reads back: with LF line ends, since
+# Set-Content would end lines with CRLF on Windows, and sha256sum -c would then
+# look for a file whose name ends with a carriage return.
 $sums = @('{0}  {1}' -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), $zipName)
-Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Value $sums -Encoding ascii
+[IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"), [Text.Encoding]::ASCII)
 
 # The previous tag by version order, not by date.
 $tags = @(& git -C $root tag --sort=-v:refname | Where-Object { $_ -ne $Tag -and $_ -match '^v\d+\.\d+\.\d+$' })
