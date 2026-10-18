@@ -143,6 +143,7 @@ impl Action {
                 "event" => "create-event",
                 "contact" => "create-contact",
                 "task" => "create-task",
+                "note" => "create-note",
                 _ => "create",
             },
             Action::ContactPhoto { .. } => "contact-photo",

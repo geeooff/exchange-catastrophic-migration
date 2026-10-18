@@ -33,3 +33,5 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
     (asks for `MailboxSettings.Read`) maps each rule's folder to the target's,
     creating missing folders, and leaves out rules the target has by name. Rules
     only classic Outlook ran come without actions or conditions: recreate by hand.
+12. Sticky notes: `ecm plan-notes --ews <url> --work reports --pst <file> --out reports/plan-notes.jsonl`
+    copies the PST's notes (HTML body when they have no text) into the Notes folder.
