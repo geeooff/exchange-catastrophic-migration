@@ -258,10 +258,18 @@ const REBUILT_FIELDS: &[&str] = &[
 /// some (else headers made from the properties), a `multipart/alternative` body
 /// with the text and HTML versions, and the attachments.
 pub fn to_mime(content: &MessageContent) -> Vec<u8> {
+    to_mime_with(content, None)
+}
+
+/// Like [`to_mime`], writing `sender` (a mailbox, e.g. `Name <address>`) as the
+/// `From` field when the message has none or an empty one, as sent items
+/// synchronized by Outlook sometimes do.
+pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
     let mut out = String::new();
     match content.headers.as_deref() {
         Some(headers) => {
             let mut has_message_id = false;
+            let mut has_from = false;
             for field in header_fields(headers) {
                 let name = field
                     .split(':')
@@ -273,14 +281,39 @@ pub fn to_mime(content: &MessageContent) -> Vec<u8> {
                     continue;
                 }
                 has_message_id |= name == "message-id";
+                if name == "from" {
+                    let empty = field
+                        .split_once(':')
+                        .is_none_or(|(_, v)| v.trim().is_empty());
+                    match (empty, sender) {
+                        (true, Some(sender)) => {
+                            out.push_str(&format!("From: {sender}\r\n"));
+                            has_from = true;
+                            continue;
+                        }
+                        (true, None) => {}
+                        (false, _) => has_from = true,
+                    }
+                }
                 out.push_str(&field);
                 out.push_str("\r\n");
+            }
+            if !has_from && let Some(sender) = sender {
+                out.push_str(&format!("From: {sender}\r\n"));
             }
             if !has_message_id && let Some(id) = &content.message_id {
                 out.push_str(&format!("Message-ID: {id}\r\n"));
             }
         }
-        None => out.push_str(&synthesized_headers(content)),
+        None => {
+            let headers = synthesized_headers(content);
+            if !headers.contains("From: ")
+                && let Some(sender) = sender
+            {
+                out.push_str(&format!("From: {sender}\r\n"));
+            }
+            out.push_str(&headers);
+        }
     }
     // A clear-signed (S/MIME) message: the store keeps the whole signed MIME
     // entity as its only attachment, which is the body to send back.
@@ -590,6 +623,21 @@ mod tests {
         let mut expected = b"From: bank@example.test\r\nSubject: Done\r\n".to_vec();
         expected.extend(signed);
         assert_eq!(mime, expected);
+    }
+
+    #[test]
+    fn fills_an_empty_from_field() {
+        let content = MessageContent {
+            headers: Some("To: <a@example.test>\r\nFrom:\r\nSubject: Zeus\r\n\r\n".into()),
+            text: Some("x".into()),
+            ..Default::default()
+        };
+        let mime = String::from_utf8(to_mime_with(&content, Some("Me <me@example.test>"))).unwrap();
+        assert!(mime.starts_with(
+            "To: <a@example.test>\r\nFrom: Me <me@example.test>\r\nSubject: Zeus\r\n"
+        ));
+        let kept = String::from_utf8(to_mime(&content)).unwrap();
+        assert!(kept.starts_with("To: <a@example.test>\r\nFrom:\r\nSubject: Zeus\r\n"));
     }
 
     #[test]

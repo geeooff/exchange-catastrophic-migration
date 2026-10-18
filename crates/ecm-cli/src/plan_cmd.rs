@@ -98,20 +98,22 @@ fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
 }
 
 /// Ids of the items an applied plan created (re-created messages), from its
-/// journal.
-pub fn created_items(plan: &Path) -> Result<HashSet<String>, String> {
+/// journal, each with whether it was rebuilt from MIME the plan carried (a
+/// PST) rather than fetched from Outlook.com.
+pub fn created_items(plan: &Path) -> Result<HashMap<String, bool>, String> {
     let actions = read_plan(plan)?;
     let journal = read_journal(&journal_path(plan))?;
     Ok(journal
         .into_iter()
-        .filter(|(step, line)| {
-            line.status == "done"
-                && matches!(
-                    actions.get(*step),
-                    Some(Action::Recreate { .. } | Action::RecreateMime { .. })
-                )
+        .filter(|(_, line)| line.status == "done")
+        .filter_map(|(step, line)| {
+            let from_pst = match actions.get(step) {
+                Some(Action::Recreate { .. }) => false,
+                Some(Action::RecreateMime { .. }) => true,
+                _ => return None,
+            };
+            line.id.map(|id| (id, from_pst))
         })
-        .filter_map(|(_, line)| line.id)
         .collect())
 }
 
