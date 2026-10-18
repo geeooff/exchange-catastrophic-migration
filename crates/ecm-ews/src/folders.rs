@@ -205,6 +205,26 @@ fn collect_paths<'a>(
 }
 
 impl<T: Transport> EwsClient<T> {
+    /// Reads one folder by its id.
+    pub fn get_folder(&self, id: &str) -> Result<EwsFolder> {
+        let body = format!(
+            r#"<m:GetFolder>{FOLDER_SHAPE}<m:FolderIds><t:FolderId Id="{}"/></m:FolderIds></m:GetFolder>"#,
+            crate::xml::escape(id)
+        );
+        let message = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("GetFolder returned no message".into()))?
+            .into_result()?;
+        let folder = message
+            .element
+            .child("Folders")
+            .and_then(|folders| folders.children.first())
+            .ok_or_else(|| Error::MalformedResponse("GetFolder returned no folder".into()))?;
+        EwsFolder::from_element(folder)
+    }
+
     /// Reads one folder by its distinguished name, e.g. `msgfolderroot`.
     pub fn get_distinguished_folder(&self, distinguished: &str) -> Result<EwsFolder> {
         let body = format!(

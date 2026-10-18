@@ -20,7 +20,75 @@ pub struct ExtendedValue {
     pub value: String,
 }
 
+/// An inbox rule as the server keeps it, for checking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleBrief {
+    /// Display name.
+    pub name: String,
+    /// Order of evaluation.
+    pub priority: Option<u32>,
+    /// Whether it runs.
+    pub enabled: bool,
+    /// Whether the server reports it in error.
+    pub in_error: bool,
+    /// Whether the server cannot run it (client-only parts).
+    pub not_supported: bool,
+    /// Folder id of a move action.
+    pub move_to: Option<String>,
+    /// Folder id of a copy action.
+    pub copy_to: Option<String>,
+    /// Whether it stops the rules after it.
+    pub stops: bool,
+}
+
 impl<T: Transport> EwsClient<T> {
+    /// The mailbox's inbox rules with what matters to check them. Only reads.
+    pub fn inbox_rules(&self) -> Result<Vec<RuleBrief>> {
+        let message = self
+            .call("<m:GetInboxRules/>")?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("GetInboxRules returned no message".into()))?
+            .into_result()?;
+        let flag = |rule: &crate::xml::Element, name: &str| {
+            rule.child_text(name)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+        };
+        let folder = |rule: &crate::xml::Element, action: &str| {
+            rule.path(&["Actions", action, "FolderId"])
+                .and_then(|id| id.attribute("Id"))
+                .map(str::to_owned)
+        };
+        Ok(message
+            .element
+            .child("InboxRules")
+            .map(|rules| {
+                rules
+                    .children
+                    .iter()
+                    .map(|rule| RuleBrief {
+                        name: rule
+                            .child_text("DisplayName")
+                            .unwrap_or_default()
+                            .trim()
+                            .to_owned(),
+                        priority: rule
+                            .child_text("Priority")
+                            .and_then(|p| p.trim().parse().ok()),
+                        enabled: flag(rule, "IsEnabled"),
+                        in_error: flag(rule, "IsInError"),
+                        not_supported: flag(rule, "IsNotSupported"),
+                        move_to: folder(rule, "MoveToFolder"),
+                        copy_to: folder(rule, "CopyToFolder"),
+                        stops: rule
+                            .path(&["Actions", "StopProcessingRules"])
+                            .is_some_and(|v| v.text.trim().eq_ignore_ascii_case("true")),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Returns the id of the mail folder `name` directly under the top of the
     /// mailbox, creating it if needed.
     pub fn ensure_top_folder(&self, name: &str) -> Result<String> {

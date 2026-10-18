@@ -525,10 +525,54 @@ fn target_pim(ews: &EwsArgs) -> Result<(), String> {
         contacts.len(),
         contacts.iter().filter(|c| c.has_picture).count()
     );
-    let rules = client.inbox_rule_names().map_err(|e| e.to_string())?;
+    let tree = client
+        .folder_tree("msgfolderroot")
+        .map_err(|e| e.to_string())?;
+    let paths: std::collections::HashMap<String, String> = tree
+        .with_paths()
+        .into_iter()
+        .map(|(path, folder)| (folder.id.clone(), path))
+        .collect();
+    let folder = |id: &str| -> String {
+        paths
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| match client.get_folder(id) {
+                Ok(folder) => paths
+                    .get(&folder.id)
+                    .cloned()
+                    .unwrap_or(format!("{} (id differs from the folder tree)", folder.name)),
+                Err(error) => format!("UNKNOWN FOLDER ({error})"),
+            })
+    };
+    let rules = client.inbox_rules().map_err(|e| e.to_string())?;
     println!("Inbox rules: {}", rules.len());
     for rule in rules {
-        println!("  {rule}");
+        let mut notes = Vec::new();
+        if let Some(id) = &rule.move_to {
+            notes.push(format!("move to {}", folder(id)));
+        }
+        if let Some(id) = &rule.copy_to {
+            notes.push(format!("copy to {}", folder(id)));
+        }
+        if rule.stops {
+            notes.push("stop".into());
+        }
+        if !rule.enabled {
+            notes.push("DISABLED".into());
+        }
+        if rule.in_error {
+            notes.push("IN ERROR".into());
+        }
+        if rule.not_supported {
+            notes.push("NOT SUPPORTED".into());
+        }
+        println!(
+            "  {:>2}. {}: {}",
+            rule.priority.unwrap_or_default(),
+            rule.name,
+            notes.join(", ")
+        );
     }
     Ok(())
 }
