@@ -30,3 +30,6 @@
 *.swp
 Thumbs.db
 .DS_Store
+
+# Release packages, built by scripts/build.ps1 release.
+dist/

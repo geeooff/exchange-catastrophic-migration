@@ -43,8 +43,10 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   the same script on `windows-latest`.
 - One branch and one PR per milestone. `main` is protected (required check `build`).
   Dependabot merges compatible crate updates on its own.
-- A tag `vX.Y.Z` publishes a Windows x64 release (`release.yml`): tag only with the
-  user's go-ahead.
+- Releases: bump the workspace version and date its `CHANGELOG.md` section in the
+  release commit; `.\scripts\build.ps1 release` then zips into `dist\`. A tag
+  `vX.Y.Z` makes `release.yml` rebuild, attest (`actions/attest`) and publish the zip
+  with its checksum: tag only with the user's go-ahead.
 - Agents may push branches, open PRs, fix CI failures and enable auto-merge
   (`gh pr merge --auto --merge`). Never bypass a required check or the ruleset.
 - Commit only when asked. Messages say what and why, ending with the

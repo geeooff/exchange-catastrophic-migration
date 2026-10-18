@@ -11,6 +11,7 @@ with rustfmt and clippy. Before committing, run the same checklist as CI:
 ```
 .\scripts\build.ps1            # fmt, clippy, rustdoc, tests, doc links, no mailbox data tracked
 .\scripts\build.ps1 build      # the same, then a release build
+.\scripts\build.ps1 release    # from a clean tree: the same, then the zip in dist\
 ```
 
 Warnings are errors, in clippy and in rustdoc.
