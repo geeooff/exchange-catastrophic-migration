@@ -8,7 +8,7 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: early development.** What works so far, all of it read-only:
+> **Status: early development.** What works so far:
 >
 > - `ecm source check --pst <file>`: a PST's folder tree and counts, with proof the
 >   file was not modified.
@@ -20,6 +20,9 @@ arrived after the migration.
 >   what is ok, misplaced, damaged, missing, duplicated, new or unmatched (CSV).
 > - `ecm inventory --outlook-com --client-id <id>`: an Outlook.com mailbox as a second
 >   source, read through Microsoft Graph after a browser sign-in (`ecm audit --source outlook`).
+> - `ecm fidelity-test`: re-creates a few items in an `ecm-test` folder (from a backup and
+>   from Outlook.com) and compares them property by property. It is the only command that
+>   writes, and only into that folder.
 >
 > See [docs/plan.md](docs/plan.md).
 

@@ -185,6 +185,7 @@ dependencies = [
  "ecm-model",
  "ecm-pst",
  "ecm-store",
+ "serde_json",
 ]
 
 [[package]]

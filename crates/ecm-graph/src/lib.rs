@@ -148,6 +148,18 @@ impl<T: Transport> GraphClient<T> {
     /// GETs a Graph URL (absolute, or relative to [`GRAPH`]) and parses its JSON,
     /// waiting and retrying when throttled (HTTP 429 or 503).
     pub fn get(&self, url: &str) -> Result<Value> {
+        let (status, body) = self.get_bytes(url, "application/json")?;
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::MalformedResponse(format!("HTTP {status}: {e}")))
+    }
+
+    /// GETs a Graph URL and returns its raw body, e.g. a message's MIME content
+    /// from `/me/messages/{id}/$value`.
+    pub fn get_raw(&self, url: &str) -> Result<Vec<u8>> {
+        self.get_bytes(url, "*/*").map(|(_, body)| body)
+    }
+
+    fn get_bytes(&self, url: &str, accept: &str) -> Result<(u16, Vec<u8>)> {
         let url = if url.starts_with("https://") {
             url.to_owned()
         } else {
@@ -156,7 +168,7 @@ impl<T: Transport> GraphClient<T> {
         let authorization = format!("Bearer {}", self.token);
         let headers = [
             ("Authorization", authorization.as_str()),
-            ("Accept", "application/json"),
+            ("Accept", accept),
             ("Prefer", "IdType=\"ImmutableId\""),
         ];
         for attempt in 1..=MAX_ATTEMPTS {
@@ -181,9 +193,7 @@ impl<T: Transport> GraphClient<T> {
                     message,
                 });
             }
-            let json: Value = serde_json::from_slice(&body)
-                .map_err(|e| Error::MalformedResponse(format!("HTTP {status}: {e}")))?;
-            return Ok(json);
+            return Ok((status, body));
         }
         Err(Error::Throttled(MAX_ATTEMPTS))
     }

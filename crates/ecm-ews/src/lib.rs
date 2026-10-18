@@ -5,15 +5,17 @@
 //! ([`xml::Element`]): the operations this tool needs (`FindFolder`, `ExportItems`,
 //! `UploadItems`, extended properties) are not covered by existing EWS crates.
 //!
-//! Nothing here changes a mailbox yet: every operation in this crate is a read.
+//! Every operation is a read, except those in [`write`](mod@write), which only create.
 
 #![forbid(unsafe_code)]
 
 use std::{thread, time::Duration};
 
 pub mod backup;
+pub mod details;
 pub mod folders;
 pub mod items;
+pub mod write;
 pub mod xml;
 
 use xml::Element;

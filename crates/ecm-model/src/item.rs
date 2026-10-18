@@ -126,6 +126,19 @@ pub fn format_utc(seconds: i64) -> String {
     )
 }
 
+/// Formats Unix seconds as ISO 8601 UTC, as EWS expects: `2024-12-30T03:19:13Z`.
+pub fn format_iso(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
 /// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };

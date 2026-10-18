@@ -7,6 +7,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::{Parser, Subcommand};
 
 mod audit_cmd;
+mod fidelity_cmd;
 use ecm_model::FolderSummary;
 
 /// Audit and repair an Exchange mailbox after a botched migration.
@@ -77,6 +78,30 @@ enum Command {
         /// Which source inventory to audit the target against.
         #[arg(long, value_enum, default_value = "pst")]
         source: audit_cmd::SourceKind,
+    },
+    /// Re-create a few items in the `ecm-test` folder and compare them property
+    /// by property with their reference. Only creates items, only in that folder.
+    FidelityTest {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the inventories (to pick damaged items).
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// Backup directory: restore a few of its items with UploadItems.
+        #[arg(long, value_name = "DIR")]
+        backup: Option<PathBuf>,
+        /// Also re-create damaged messages from Outlook.com (MIME through Graph).
+        #[arg(long, requires = "client_id")]
+        outlook_com: bool,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: Option<String>,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Items per test.
+        #[arg(long, default_value_t = 3)]
+        count: usize,
     },
     /// Write a reviewable plan of repair actions.
     Plan,
@@ -177,6 +202,24 @@ fn main() -> ExitCode {
             cutoff,
             source,
         } => report(audit_cmd::audit(&work, &cutoff, source)),
+        Command::FidelityTest {
+            ews,
+            work,
+            backup,
+            outlook_com,
+            client_id,
+            tenant,
+            count,
+        } => report(fidelity_cmd::fidelity_test(
+            &ews,
+            &work,
+            backup.as_deref(),
+            client_id
+                .filter(|_| outlook_com)
+                .map(|client_id| audit_cmd::GraphArgs { client_id, tenant })
+                .as_ref(),
+            count,
+        )),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");
             ExitCode::from(2)
