@@ -30,7 +30,8 @@ enum Command {
     /// Check a source: open it, verify its checksum, show its folder tree and counts.
     #[command(subcommand)]
     Source(SourceCommand),
-    /// Check a target: authenticate, show its folder tree and counts.
+    /// Look at the target mailbox: folder tree and counts, items, calendar and
+    /// inbox rules. Only reads.
     #[command(subcommand)]
     Target(TargetCommand),
     /// Export the whole target mailbox before any change. Only reads the mailbox.
@@ -273,8 +274,9 @@ enum Command {
         #[arg(long = "moved-sender", value_name = "DOMAIN")]
         moved_senders: Vec<String>,
     },
-    /// Run a reviewed plan, journaled and resumable. Only creates folders and
-    /// items and moves items; nothing is deleted.
+    /// Run a reviewed plan, journaled and resumable. Creates folders, items, inbox
+    /// rules and contact photos, and moves items (and quarantine folders into
+    /// Deleted Items); nothing is deleted.
     Apply {
         #[command(flatten)]
         ews: EwsArgs,

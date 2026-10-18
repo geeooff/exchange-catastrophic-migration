@@ -87,7 +87,8 @@ it against its `.sha256`, and unzip `ecm.exe` anywhere. To build it yourself:
 - Sources are opened read-only. A PST is opened with a read-only file handle and its
   checksum is verified before and after a run.
 - Nothing changes on the target without an explicit plan file you have reviewed.
-- Items are never hard-deleted: they are moved to a quarantine folder first.
+- Items are never deleted: they are moved to a quarantine folder, which leaves only
+  into Deleted Items, for you to empty when you are sure.
 - A full backup of the target can be taken before any change.
 
 ## Built on

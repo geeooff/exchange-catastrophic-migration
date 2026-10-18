@@ -1,11 +1,12 @@
 //! Exchange Web Services (EWS) client: SOAP requests, paging, throttling and retries.
 //!
-//! Used both to read a source mailbox and to read and repair a target mailbox.
-//! Requests are written by hand and responses parsed into a small XML tree
-//! ([`xml::Element`]): the operations this tool needs (`FindFolder`, `ExportItems`,
-//! `UploadItems`, extended properties) are not covered by existing EWS crates.
+//! Reads and repairs the target mailbox. Requests are written by hand and responses
+//! parsed into a small XML tree ([`xml::Element`]): the operations this tool needs
+//! (`FindFolder`, `ExportItems`, `UploadItems`, extended properties, inbox rules)
+//! are not covered by existing EWS crates.
 //!
-//! Every operation is a read, except those in [`write`](mod@write), which only create.
+//! Every operation is a read, except those in [`write`](mod@write), which never
+//! delete.
 
 #![forbid(unsafe_code)]
 
