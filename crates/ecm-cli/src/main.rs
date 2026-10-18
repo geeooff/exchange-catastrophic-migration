@@ -184,6 +184,11 @@ enum Command {
         /// are replaced by the PST's copy. Repeat for several plans.
         #[arg(long, value_name = "PLAN")]
         after: Vec<PathBuf>,
+        /// Mailbox written as `From` when a message has an empty one (sent items),
+        /// e.g. `Name <address>`; copies an earlier plan made without sender are
+        /// then replaced.
+        #[arg(long, value_name = "MAILBOX")]
+        sender: Option<String>,
     },
     /// Write a plan that copies the Outlook.com inbox rules into the target, with
     /// their folders mapped to the target's, leaving out rules it has by name.
@@ -447,8 +452,15 @@ fn main() -> ExitCode {
             cutoff,
             out,
             after,
+            sender,
         } => report(pst_plan_cmd::plan_pst_command(
-            &ews, &work, &pst, &cutoff, &after, &out,
+            &ews,
+            &work,
+            &pst,
+            &cutoff,
+            &after,
+            sender.as_deref(),
+            &out,
         )),
         Command::PlanRules {
             ews,

@@ -34,6 +34,7 @@ pub fn plan_pst_command(
     pst: &Path,
     cutoff: &str,
     after: &[std::path::PathBuf],
+    sender: Option<&str>,
     out: &Path,
 ) -> Result<(), String> {
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
@@ -70,7 +71,7 @@ pub fn plan_pst_command(
     // Messages an earlier plan re-created from a source that lost their
     // Message-ID or sender: the PST's own copy replaces them, and every copy
     // made that way is set aside once it is back.
-    let mut created = HashSet::new();
+    let mut created = HashMap::new();
     for plan in after {
         created.extend(created_items(plan)?);
     }
@@ -81,8 +82,11 @@ pub fn plan_pst_command(
         match role {
             TargetRole::Copy { source: s, defects }
                 if ecm_audit::verify::in_scope(&source[*s])
-                    && created.contains(&target[index].key)
-                    && (defects.contains(&Defect::MessageIdChanged)
+                    && created.contains_key(&target[index].key)
+                    // A Message-ID lost on a PST rebuild would be lost again.
+                    && ((defects.contains(&Defect::MessageIdChanged)
+                        && created.get(&target[index].key) == Some(&false)
+                        || sender.is_some() && defects.contains(&Defect::SenderLost))
                         && audit.source_status[*s] == SourceStatus::Degraded
                         // A signed message rebuilt before signed entities were
                         // handled came back without a body.
@@ -92,7 +96,7 @@ pub fn plan_pst_command(
                 replace.push(*s);
                 copies.entry(*s).or_default().push(index);
             }
-            TargetRole::Duplicate { source: s } if created.contains(&target[index].key) => {
+            TargetRole::Duplicate { source: s } if created.contains_key(&target[index].key) => {
                 copies.entry(*s).or_default().push(index);
             }
             _ => {}
@@ -142,7 +146,7 @@ pub fn plan_pst_command(
             match reader.message_content(key) {
                 Ok(content) => {
                     skipped_attachments += content.skipped_attachments;
-                    let mime = ecm_pst::content::to_mime(&content);
+                    let mime = ecm_pst::content::to_mime_with(&content, sender);
                     *action = Action::RecreateMime {
                         to: to.clone(),
                         subject: subject.clone(),
