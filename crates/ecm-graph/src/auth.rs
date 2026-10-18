@@ -9,9 +9,9 @@ use serde_json::Value;
 
 use crate::{Error, Result, Transport, encode};
 
-/// Read-only permissions asked for. `offline_access` is not requested: the token
-/// lives for one run only.
-pub const SCOPES: &str = "Mail.Read Contacts.Read Calendars.Read Tasks.Read";
+/// Read-only permissions asked for (`User.Read` for `/me`). `offline_access` is not
+/// requested: the token lives for one run only.
+pub const SCOPES: &str = "Mail.Read Contacts.Read Calendars.Read Tasks.Read User.Read";
 
 /// What to show the user so they can sign in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +47,7 @@ fn post_form<T: Transport>(
         .map(|(key, value)| format!("{key}={}", encode(value)))
         .collect::<Vec<_>>()
         .join("&");
-    let (status, response) = transport.send(
+    let response = transport.send(
         "POST",
         url,
         &[
@@ -56,7 +56,8 @@ fn post_form<T: Transport>(
         ],
         body.as_bytes(),
     )?;
-    let json = serde_json::from_slice(&response)
+    let status = response.status;
+    let json = serde_json::from_slice(&response.body)
         .map_err(|e| Error::MalformedResponse(format!("HTTP {status} from sign-in: {e}")))?;
     Ok((status, json))
 }

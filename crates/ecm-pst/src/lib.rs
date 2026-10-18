@@ -394,13 +394,16 @@ const PR_MESSAGE_SIZE: u16 = 0x0E08;
 const PR_HASATTACH: u16 = 0x0E1B;
 const PR_INTERNET_MESSAGE_ID: u16 = 0x1035;
 const PR_NATIVE_BODY_INFO: u16 = 0x1016;
+const PR_BODY: u16 = 0x1000;
+const PR_RTF_COMPRESSED: u16 = 0x1009;
+const PR_HTML: u16 = 0x1013;
 const PR_CREATION_TIME: u16 = 0x3007;
 const PR_SENDER_SMTP_ADDRESS: u16 = 0x5D01;
 /// `MSGFLAG_READ`.
 const MSGFLAG_READ: i32 = 0x1;
 
 /// The properties [`PstSource::items`] loads from each message, and no others.
-const ITEM_PROPERTIES: [u16; 14] = [
+const ITEM_PROPERTIES: [u16; 17] = [
     PR_MESSAGE_CLASS,
     PR_SUBJECT,
     PR_CLIENT_SUBMIT_TIME,
@@ -413,6 +416,9 @@ const ITEM_PROPERTIES: [u16; 14] = [
     PR_HASATTACH,
     PR_INTERNET_MESSAGE_ID,
     PR_NATIVE_BODY_INFO,
+    PR_BODY,
+    PR_RTF_COMPRESSED,
+    PR_HTML,
     PR_CREATION_TIME,
     PR_SENDER_SMTP_ADDRESS,
 ];
@@ -476,7 +482,20 @@ fn item_record(key: String, folder: &str, properties: &BTreeMap<u16, PropertyVal
         },
         read: integer(PR_MESSAGE_FLAGS).map(|flags| flags & i64::from(MSGFLAG_READ) != 0),
         has_headers: Some(text(PR_TRANSPORT_MESSAGE_HEADERS).is_some()),
-        native_body: integer(PR_NATIVE_BODY_INFO).and_then(|n| u8::try_from(n).ok()),
+        // PSTs rarely store PR_NATIVE_BODY_INFO: the richest body present tells.
+        native_body: integer(PR_NATIVE_BODY_INFO)
+            .and_then(|n| u8::try_from(n).ok())
+            .or_else(|| {
+                if properties.contains_key(&PR_HTML) {
+                    Some(3)
+                } else if properties.contains_key(&PR_RTF_COMPRESSED) {
+                    Some(2)
+                } else if properties.contains_key(&PR_BODY) {
+                    Some(1)
+                } else {
+                    None
+                }
+            }),
     }
 }
 

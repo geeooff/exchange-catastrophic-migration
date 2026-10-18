@@ -47,8 +47,16 @@ pub enum Error {
 /// Result type of this crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// An HTTP response: status and body.
-pub type HttpResponse = (u16, Vec<u8>);
+/// An HTTP response.
+#[derive(Debug, Clone, Default)]
+pub struct HttpResponse {
+    /// HTTP status.
+    pub status: u16,
+    /// `WWW-Authenticate` header, when the server sent one.
+    pub www_authenticate: Option<String>,
+    /// Body.
+    pub body: Vec<u8>,
+}
 
 /// Sends HTTPS requests to any host. Implemented over WinHTTP on Windows, and by
 /// fakes in tests.
@@ -95,7 +103,11 @@ mod winhttp {
             }
             clients[&key]
                 .request(method, &url.path, headers, body)
-                .map(|response| (response.status, response.body))
+                .map(|response| HttpResponse {
+                    status: response.status,
+                    www_authenticate: response.header("WWW-Authenticate").map(str::to_owned),
+                    body: response.body,
+                })
                 .map_err(|e| Error::Transport(e.to_string()))
         }
     }
@@ -148,23 +160,29 @@ impl<T: Transport> GraphClient<T> {
             ("Prefer", "IdType=\"ImmutableId\""),
         ];
         for attempt in 1..=MAX_ATTEMPTS {
-            let (status, body) = self.transport.send("GET", &url, &headers, &[])?;
+            let response = self.transport.send("GET", &url, &headers, &[])?;
+            let (status, body) = (response.status, response.body);
             if status == 429 || status == 503 {
                 if attempt < MAX_ATTEMPTS {
                     (self.sleep)(Duration::from_secs(5 * u64::from(attempt)));
                 }
                 continue;
             }
-            let json: Value = serde_json::from_slice(&body)
-                .map_err(|e| Error::MalformedResponse(format!("HTTP {status}: {e}")))?;
             if !(200..300).contains(&status) {
+                let json: Value = serde_json::from_slice(&body).unwrap_or_default();
                 let error = &json["error"];
+                let mut message = error["message"].as_str().unwrap_or_default().to_owned();
+                if let Some(challenge) = response.www_authenticate.filter(|_| status == 401) {
+                    message = format!("{message} (WWW-Authenticate: {challenge})");
+                }
                 return Err(Error::Graph {
                     status,
                     code: error["code"].as_str().unwrap_or_default().to_owned(),
-                    message: error["message"].as_str().unwrap_or_default().to_owned(),
+                    message,
                 });
             }
+            let json: Value = serde_json::from_slice(&body)
+                .map_err(|e| Error::MalformedResponse(format!("HTTP {status}: {e}")))?;
             return Ok(json);
         }
         Err(Error::Throttled(MAX_ATTEMPTS))
@@ -240,7 +258,11 @@ pub(crate) mod testing {
                 .borrow_mut()
                 .pop_front()
                 .expect("no canned response left");
-            Ok((status, body.into_bytes()))
+            Ok(HttpResponse {
+                status,
+                www_authenticate: None,
+                body: body.into_bytes(),
+            })
         }
     }
 }

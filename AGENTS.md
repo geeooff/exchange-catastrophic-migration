@@ -52,6 +52,9 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - `windows` 0.62: `WINHTTP_AUTH_SCHEME_*` are newtypes: use `.0`.
 - OVH EWS: Exchange 2019 (15.2), NTLM/Negotiate only. Send
   `RequestServerVersion` `Exchange2013_SP1`.
+- Graph with personal accounts: `/me` needs the `User.Read` scope, or Graph answers a
+  bare `401 UnknownError`. Folder names come back in the account's language
+  (Outlook.com: English).
 - Read-only probing from an OWA session: POST to `/owa/service.svc?action=X&EP=1`
   with the `X-OWA-CANARY` header (from the cookie) and the JSON body in
   `X-OWA-UrlPostData`. Opening a mail in OWA marks it read: avoid that.

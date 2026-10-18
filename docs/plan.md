@@ -196,6 +196,10 @@ property.
   on message"), which MS-PST allows and which is common for contacts, appointments and
   tasks. The inventory falls back to the folder's contents table row for them; a few
   still fail and are reported. Worth fixing upstream.
+- Bodies can be silently degraded: on a real mailbox, about 68,000 copies had their
+  HTML body stored as a plain-text body (`PR_NATIVE_BODY_INFO` = 1), so clients show
+  raw HTML. PSTs rarely store `PR_NATIVE_BODY_INFO`; the inventory derives it from the
+  bodies present (HTML, else RTF, else text), and the audit flags the mismatch.
 - A PST export can be incomplete. On a real mailbox, about 3,000 sent items existed
   only as damaged copies on the target. Items with no source match are therefore
   never quarantined by default: they are reported as `unmatched` for review.
