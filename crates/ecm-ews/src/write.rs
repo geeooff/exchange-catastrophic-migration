@@ -162,6 +162,30 @@ impl<T: Transport> EwsClient<T> {
         self.create_from_mime_as("Message", folder_id, mime, extended)
     }
 
+    /// Creates an item from its EWS XML (`<t:CalendarItem>`, `<t:Contact>`,
+    /// `<t:Task>`…) in a folder, without sending any meeting invitation. Returns
+    /// the new item id.
+    pub fn create_item(&self, folder_id: &str, item_xml: &str) -> Result<String> {
+        let body = format!(
+            r#"<m:CreateItem SendMeetingInvitations="SendToNone"><m:SavedItemFolderId><t:FolderId Id="{}"/></m:SavedItemFolderId><m:Items>{item_xml}</m:Items></m:CreateItem>"#,
+            escape(folder_id)
+        );
+        let message = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("CreateItem returned no message".into()))?
+            .into_result()?;
+        message
+            .element
+            .child("Items")
+            .and_then(|items| items.children.first())
+            .and_then(|item| item.child("ItemId"))
+            .and_then(|id| id.attribute("Id"))
+            .map(str::to_owned)
+            .ok_or_else(|| Error::MalformedResponse("CreateItem returned no item id".into()))
+    }
+
     fn create_from_mime_as(
         &self,
         element: &str,
@@ -234,6 +258,24 @@ mod tests {
             "<t:MimeContent CharacterSet=\"UTF-8\">U3ViamVjdDogeA0KDQpib2R5</t:MimeContent>"
         ));
         assert!(request.contains(r#"<t:ExtendedFieldURI PropertyTag="0x0E07" PropertyType="Integer"/><t:Value>1</t:Value>"#));
+    }
+
+    #[test]
+    fn creates_typed_items_without_invitations() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:CreateItemResponse><m:ResponseMessages><m:CreateItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:CalendarItem><t:ItemId Id="C1" ChangeKey="1"/></t:CalendarItem></m:Items></m:CreateItemResponseMessage></m:ResponseMessages></m:CreateItemResponse>"#,
+            ),
+        )]);
+        let id = EwsClient::new(&fake)
+            .create_item(
+                "CAL",
+                "<t:CalendarItem><t:Subject>x</t:Subject></t:CalendarItem>",
+            )
+            .unwrap();
+        assert_eq!(id, "C1");
+        assert!(fake.requests.borrow()[0].contains(r#"<m:CreateItem SendMeetingInvitations="SendToNone"><m:SavedItemFolderId><t:FolderId Id="CAL"/></m:SavedItemFolderId><m:Items><t:CalendarItem>"#));
     }
 
     #[test]

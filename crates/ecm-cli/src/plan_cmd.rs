@@ -391,6 +391,11 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
             } => self
                 .folder_id(to)
                 .and_then(|folder| self.recreate(&folder, source, *read, *sent, *received)),
+            Action::Create { to, item, .. } => self.folder_id(to).and_then(|folder| {
+                self.client
+                    .create_item(&folder, item)
+                    .map_err(|e| e.to_string())
+            }),
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)

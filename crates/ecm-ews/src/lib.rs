@@ -15,6 +15,7 @@ pub mod backup;
 pub mod details;
 pub mod folders;
 pub mod items;
+pub mod pim;
 pub mod write;
 pub mod xml;
 

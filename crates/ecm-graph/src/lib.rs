@@ -16,6 +16,7 @@ use serde_json::Value;
 
 pub mod auth;
 pub mod mail;
+pub mod pim;
 
 /// Errors from Microsoft Graph and its sign-in.
 #[derive(Debug, thiserror::Error)]
@@ -148,7 +149,13 @@ impl<T: Transport> GraphClient<T> {
     /// GETs a Graph URL (absolute, or relative to [`GRAPH`]) and parses its JSON,
     /// waiting and retrying when throttled (HTTP 429 or 503).
     pub fn get(&self, url: &str) -> Result<Value> {
-        let (status, body) = self.get_bytes(url, "application/json")?;
+        self.get_in(url, None)
+    }
+
+    /// Like [`get`](Self::get), with times written in `time_zone` (a Windows or
+    /// IANA name) instead of UTC.
+    pub fn get_in(&self, url: &str, time_zone: Option<&str>) -> Result<Value> {
+        let (status, body) = self.get_bytes(url, "application/json", time_zone)?;
         serde_json::from_slice(&body)
             .map_err(|e| Error::MalformedResponse(format!("HTTP {status}: {e}")))
     }
@@ -156,20 +163,29 @@ impl<T: Transport> GraphClient<T> {
     /// GETs a Graph URL and returns its raw body, e.g. a message's MIME content
     /// from `/me/messages/{id}/$value`.
     pub fn get_raw(&self, url: &str) -> Result<Vec<u8>> {
-        self.get_bytes(url, "*/*").map(|(_, body)| body)
+        self.get_bytes(url, "*/*", None).map(|(_, body)| body)
     }
 
-    fn get_bytes(&self, url: &str, accept: &str) -> Result<(u16, Vec<u8>)> {
+    fn get_bytes(
+        &self,
+        url: &str,
+        accept: &str,
+        time_zone: Option<&str>,
+    ) -> Result<(u16, Vec<u8>)> {
         let url = if url.starts_with("https://") {
             url.to_owned()
         } else {
             format!("{GRAPH}{url}")
         };
         let authorization = format!("Bearer {}", self.token);
+        let prefer = match time_zone {
+            Some(zone) => format!("IdType=\"ImmutableId\", outlook.timezone=\"{zone}\""),
+            None => "IdType=\"ImmutableId\"".to_owned(),
+        };
         let headers = [
             ("Authorization", authorization.as_str()),
             ("Accept", accept),
-            ("Prefer", "IdType=\"ImmutableId\""),
+            ("Prefer", prefer.as_str()),
         ];
         for attempt in 1..=MAX_ATTEMPTS {
             let response = self.transport.send("GET", &url, &headers, &[])?;
@@ -238,7 +254,9 @@ pub(crate) mod testing {
     #[derive(Default)]
     pub struct FakeTransport {
         pub responses: RefCell<VecDeque<(u16, String)>>,
-        pub requests: RefCell<Vec<(String, String, String)>>,
+        /// Method, URL, body and headers of each request.
+        #[allow(clippy::type_complexity)]
+        pub requests: RefCell<Vec<(String, String, String, Vec<(String, String)>)>>,
     }
 
     impl FakeTransport {
@@ -255,13 +273,17 @@ pub(crate) mod testing {
             &self,
             method: &str,
             url: &str,
-            _: &[(&str, &str)],
+            headers: &[(&str, &str)],
             body: &[u8],
         ) -> Result<HttpResponse> {
             self.requests.borrow_mut().push((
                 method.to_owned(),
                 url.to_owned(),
                 String::from_utf8_lossy(body).into_owned(),
+                headers
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                    .collect(),
             ));
             let (status, body) = self
                 .responses
