@@ -1,6 +1,10 @@
 //! Mail folders and messages, read-only.
 
-use ecm_model::{FolderSummary, ItemRecord, item::parse_utc};
+use ecm_model::{
+    FolderSummary, ItemRecord,
+    compare::{PropertyMap, address_list},
+    item::parse_utc,
+};
 use serde_json::Value;
 
 use crate::{Error, GraphClient, Result, Transport, encode};
@@ -129,6 +133,98 @@ impl<T: Transport> GraphClient<T> {
     }
 }
 
+impl<T: Transport> GraphClient<T> {
+    /// A message's MIME content, as Outlook.com stores it.
+    pub fn mime(&self, message_id: &str) -> Result<Vec<u8>> {
+        self.get_raw(&format!("/me/messages/{}/$value", encode(message_id)))
+    }
+
+    /// A message's detailed, normalized properties, named as in
+    /// [`ecm_model::compare::COMPARED`].
+    pub fn message_properties(&self, message_id: &str) -> Result<PropertyMap> {
+        let message = self.get(&format!(
+            "/me/messages/{}?$select={}&$expand={}",
+            encode(message_id),
+            "subject,body,from,toRecipients,ccRecipients,sentDateTime,receivedDateTime,isRead,hasAttachments,internetMessageId,internetMessageHeaders",
+            encode(&format!(
+                "attachments($select=name),singleValueExtendedProperties($filter={EXTENDED})"
+            ))
+        ))?;
+        Ok(message_properties(&message))
+    }
+}
+
+/// Normalizes a Graph message into a [`PropertyMap`].
+pub fn message_properties(message: &Value) -> PropertyMap {
+    let mut map = PropertyMap::new();
+    let text = |value: &Value| {
+        value
+            .as_str()
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+    };
+    let addresses = |value: &Value| {
+        address_list(
+            value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|r| r["emailAddress"]["address"].as_str()),
+        )
+    };
+    let record = record(message, "").unwrap_or_default();
+    map.insert("class".into(), record.class);
+    if let Some(subject) = text(&message["subject"]) {
+        map.insert("subject".into(), subject);
+    }
+    if let Some(from) = text(&message["from"]["emailAddress"]["address"]) {
+        map.insert("from".into(), from.to_lowercase());
+    }
+    map.insert("to".into(), addresses(&message["toRecipients"]));
+    map.insert("cc".into(), addresses(&message["ccRecipients"]));
+    for (name, value) in [("sent", record.sent), ("received", record.received)] {
+        if let Some(value) = value {
+            map.insert(name.into(), value.to_string());
+        }
+    }
+    if let Some(id) = record.message_id {
+        map.insert("message_id".into(), id);
+    }
+    if let Some(read) = record.read {
+        map.insert("read".into(), read.to_string());
+    }
+    if let Some(has) = record.has_attachments {
+        map.insert("has_attachments".into(), has.to_string());
+    }
+    let mut names: Vec<String> = message["attachments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["name"].as_str())
+        .map(|n| n.trim().to_owned())
+        .collect();
+    names.sort();
+    map.insert("attachments".into(), names.join(";"));
+    let body = &message["body"];
+    if let Some(kind) = body["contentType"].as_str() {
+        map.insert("body_type".into(), kind.to_lowercase());
+    }
+    if let Some(content) = body["content"].as_str() {
+        map.insert("body_length".into(), content.chars().count().to_string());
+    }
+    map.insert(
+        "headers".into(),
+        message["internetMessageHeaders"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty())
+            .to_string(),
+    );
+    if let Some(native) = record.native_body {
+        map.insert("native_body".into(), native.to_string());
+    }
+    map
+}
+
 fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
     let text = |value: &Value| {
         value
@@ -188,6 +284,29 @@ fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
 #[cfg(test)]
 mod tests {
     use crate::{GraphClient, testing::FakeTransport};
+
+    #[test]
+    fn normalizes_message_properties() {
+        let message: serde_json::Value = serde_json::from_str(r#"{"id":"M","subject":"Hi","body":{"contentType":"html","content":"<p>Hi</p>"},
+            "from":{"emailAddress":{"address":"A@x.test"}},"toRecipients":[{"emailAddress":{"address":"c@x.test"}},{"emailAddress":{"address":"B@x.test"}}],
+            "ccRecipients":[],"sentDateTime":"2019-11-14T10:00:00Z","receivedDateTime":"2019-11-14T10:00:01Z","isRead":false,"hasAttachments":true,
+            "internetMessageId":"<1@x>","internetMessageHeaders":[{"name":"Received","value":"x"}],"attachments":[{"name":"b.pdf"},{"name":"a.jpg"}]}"#).unwrap();
+        let map = super::message_properties(&message);
+        assert_eq!(map["body_type"], "html");
+        assert_eq!(map["body_length"], "9");
+        assert_eq!(map["to"], "b@x.test;c@x.test");
+        assert_eq!(map["attachments"], "a.jpg;b.pdf");
+        assert_eq!(
+            (map["read"].as_str(), map["headers"].as_str()),
+            ("false", "true")
+        );
+        assert_eq!(
+            map["sent"],
+            ecm_model::item::parse_utc("2019-11-14T10:00:00Z")
+                .unwrap()
+                .to_string()
+        );
+    }
 
     #[test]
     fn reads_the_folder_tree_and_messages() {

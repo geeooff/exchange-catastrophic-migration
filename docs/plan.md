@@ -170,8 +170,8 @@ property.
 |---|---|---|
 | M0 ✅ | Workspace, CI (fmt, clippy, tests), contribution guide | CI is green on an empty skeleton |
 | M1 ✅ | `source check` on PST | Folder tree and item counts match what Outlook shows for a test PST; checksum unchanged after the run |
-| M2 | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
-| M3 | Spike: re-upload fidelity (needs a disposable test mailbox; M4 comes first since it only reads) | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
+| M2 ✅ | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
+| M3 (messages ✅) | Spike: re-upload fidelity, in a dedicated `ecm-test` folder (`ecm fidelity-test`). Done for messages: backup → `UploadItems` and Outlook.com MIME → `CreateItem` match their reference on every compared property. Still to do: PST messages (no MIME in a PST), appointments, contacts, tasks | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
 | M4 ✅ | `inventory` + `audit` | CSV report with classes and defects; tested on synthetic damaged mailboxes |
 | M5 | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
 | M6 | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
@@ -200,6 +200,9 @@ property.
   HTML body stored as a plain-text body (`PR_NATIVE_BODY_INFO` = 1), so clients show
   raw HTML. PSTs rarely store `PR_NATIVE_BODY_INFO`; the inventory derives it from the
   bodies present (HTML, else RTF, else text), and the audit flags the mismatch.
+- Migrations can also empty bodies and duplicate recipients: in a real test, damaged
+  copies had a zero-length body or every recipient listed twice, while the copy
+  re-created from the source was faithful.
 - A PST export can be incomplete. On a real mailbox, about 3,000 sent items existed
   only as damaged copies on the target. Items with no source match are therefore
   never quarantined by default: they are reported as `unmatched` for review.

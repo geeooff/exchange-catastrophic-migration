@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod compare;
 pub mod item;
 
 pub use item::ItemRecord;
