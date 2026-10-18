@@ -111,6 +111,13 @@ pub enum Action {
         /// The item, as EWS XML (`<t:CalendarItem>`, `<t:Contact>`, `<t:Task>`).
         item: String,
     },
+    /// Create an inbox rule from its EWS XML (`<t:Rule>`).
+    CreateRule {
+        /// Rule name, for reports.
+        name: String,
+        /// The rule, as EWS XML.
+        rule: String,
+    },
     /// Set the photo of a target contact.
     ContactPhoto {
         /// Target contact id.
@@ -139,6 +146,7 @@ impl Action {
                 _ => "create",
             },
             Action::ContactPhoto { .. } => "contact-photo",
+            Action::CreateRule { .. } => "create-rule",
         }
     }
 }

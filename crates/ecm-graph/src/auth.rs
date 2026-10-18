@@ -57,6 +57,20 @@ pub fn sign_in<T: Transport>(
         .map(|tokens| tokens.access)
 }
 
+/// Like [`sign_in`], asking for [`SCOPES`] plus `extra` (space-separated), such
+/// as `MailboxSettings.Read` to read inbox rules.
+pub fn sign_in_with<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    extra: &str,
+    prompt: &mut dyn FnMut(&DeviceCodePrompt),
+) -> Result<String> {
+    let scopes = format!("{SCOPES} {extra}");
+    sign_in_with_sleep(transport, client_id, tenant, &scopes, prompt, thread::sleep)
+        .map(|tokens| tokens.access)
+}
+
 /// Like [`sign_in`], but also asks for a refresh token ([`LONG_RUN_SCOPES`]), so
 /// that [`refresh`] can renew the access token during a long run.
 pub fn sign_in_for_long_run<T: Transport>(

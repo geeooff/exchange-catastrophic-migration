@@ -462,6 +462,12 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         .map_err(|e| e.to_string())
                 })
             }
+            Action::CreateRule { name, rule } => self.resolve_folders(rule).and_then(|rule| {
+                self.client
+                    .create_inbox_rule(&rule)
+                    .map(|()| name.clone())
+                    .map_err(|e| e.to_string())
+            }),
             Action::ContactPhoto { item, photo, .. } => {
                 use base64::Engine as _;
                 base64::engine::general_purpose::STANDARD
@@ -477,6 +483,29 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)
+    }
+
+    /// Replaces the folder placeholders of rule XML with folder ids.
+    fn resolve_folders(&self, rule: &str) -> Result<String, String> {
+        let marker = format!(r#"Id="{}"#, crate::rules_cmd::FOLDER_PLACEHOLDER);
+        let mut out = String::new();
+        let mut rest = rule;
+        while let Some(start) = rest.find(&marker) {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + marker.len()..];
+            let end = after.find('"').ok_or("unterminated folder placeholder")?;
+            let path = after[..end]
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'");
+            let id = self.folder_id(&path)?;
+            out.push_str(&format!(r#"Id="{}"#, ecm_ews::xml::escape(&id)));
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        Ok(out)
     }
 
     fn moves(&mut self, actions: &[Action], batch: &[usize]) -> Result<(), String> {

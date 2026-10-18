@@ -11,6 +11,7 @@ mod fidelity_cmd;
 mod pim_cmd;
 mod plan_cmd;
 mod pst_plan_cmd;
+mod rules_cmd;
 mod verify_cmd;
 use ecm_model::FolderSummary;
 
@@ -183,6 +184,27 @@ enum Command {
         /// are replaced by the PST's copy. Repeat for several plans.
         #[arg(long, value_name = "PLAN")]
         after: Vec<PathBuf>,
+    },
+    /// Write a plan that copies the Outlook.com inbox rules into the target, with
+    /// their folders mapped to the target's, leaving out rules it has by name.
+    /// Only reads.
+    PlanRules {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Re-create rules only classic Outlook ran (such as an alert on screen),
+        /// which the server cannot run, as rules marking their messages as
+        /// important.
+        #[arg(long)]
+        client_only_as_important: bool,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority for Graph.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
     },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
@@ -428,6 +450,18 @@ fn main() -> ExitCode {
         } => report(pst_plan_cmd::plan_pst_command(
             &ews, &work, &pst, &cutoff, &after, &out,
         )),
+        Command::PlanRules {
+            ews,
+            client_only_as_important,
+            client_id,
+            tenant,
+            out,
+        } => report(rules_cmd::plan_rules_command(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            client_only_as_important,
+            &out,
+        )),
         Command::Verify {
             ews,
             work,
@@ -491,6 +525,11 @@ fn target_pim(ews: &EwsArgs) -> Result<(), String> {
         contacts.len(),
         contacts.iter().filter(|c| c.has_picture).count()
     );
+    let rules = client.inbox_rule_names().map_err(|e| e.to_string())?;
+    println!("Inbox rules: {}", rules.len());
+    for rule in rules {
+        println!("  {rule}");
+    }
     Ok(())
 }
 

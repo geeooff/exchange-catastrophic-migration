@@ -186,6 +186,42 @@ impl<T: Transport> EwsClient<T> {
             .ok_or_else(|| Error::MalformedResponse("CreateItem returned no item id".into()))
     }
 
+    /// Display names of the mailbox's inbox rules (`GetInboxRules`). Only reads.
+    pub fn inbox_rule_names(&self) -> Result<Vec<String>> {
+        let message = self
+            .call("<m:GetInboxRules/>")?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("GetInboxRules returned no message".into()))?
+            .into_result()?;
+        Ok(message
+            .element
+            .child("InboxRules")
+            .map(|rules| {
+                rules
+                    .children
+                    .iter()
+                    .filter_map(|rule| rule.child_text("DisplayName"))
+                    .map(|name| name.trim().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Creates an inbox rule from its EWS XML (`<t:Rule>`), with
+    /// `UpdateInboxRules`.
+    pub fn create_inbox_rule(&self, rule_xml: &str) -> Result<()> {
+        let body = format!(
+            "<m:UpdateInboxRules><m:RemoveOutlookRuleBlob>false</m:RemoveOutlookRuleBlob><m:Operations><t:CreateRuleOperation>{rule_xml}</t:CreateRuleOperation></m:Operations></m:UpdateInboxRules>"
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("UpdateInboxRules returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
     fn create_from_mime_as(
         &self,
         element: &str,
@@ -276,6 +312,30 @@ mod tests {
             .unwrap();
         assert_eq!(id, "C1");
         assert!(fake.requests.borrow()[0].contains(r#"<m:CreateItem SendMeetingInvitations="SendToNone"><m:SavedItemFolderId><t:FolderId Id="CAL"/></m:SavedItemFolderId><m:Items><t:CalendarItem>"#));
+    }
+
+    #[test]
+    fn reads_rule_names_and_creates_a_rule() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                soap(
+                    r#"<m:GetInboxRulesResponse ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:OutlookRuleBlobExists>false</m:OutlookRuleBlobExists><m:InboxRules><t:Rule><t:RuleId>R1</t:RuleId><t:DisplayName>GitHub</t:DisplayName></t:Rule></m:InboxRules></m:GetInboxRulesResponse>"#,
+                ),
+            ),
+            (
+                200,
+                soap(
+                    r#"<m:UpdateInboxRulesResponse ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:UpdateInboxRulesResponse>"#,
+                ),
+            ),
+        ]);
+        let client = EwsClient::new(&fake);
+        assert_eq!(client.inbox_rule_names().unwrap(), ["GitHub"]);
+        client
+            .create_inbox_rule("<t:Rule><t:DisplayName>x</t:DisplayName></t:Rule>")
+            .unwrap();
+        assert!(fake.requests.borrow()[1].contains("<t:CreateRuleOperation><t:Rule><t:DisplayName>x</t:DisplayName></t:Rule></t:CreateRuleOperation>"));
     }
 
     #[test]
