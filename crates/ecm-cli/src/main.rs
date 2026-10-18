@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod audit_cmd;
 mod fidelity_cmd;
 mod plan_cmd;
+mod verify_cmd;
 use ecm_model::FolderSummary;
 
 /// Audit and repair an Exchange mailbox after a botched migration.
@@ -120,6 +121,10 @@ enum Command {
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
+        /// An applied plan: the migration copies it moved into folders are
+        /// re-created from the source and quarantined. Repeat for several plans.
+        #[arg(long, value_name = "PLAN")]
+        after: Vec<PathBuf>,
     },
     /// Run a reviewed plan, journaled and resumable. Only creates folders and
     /// items and moves items; nothing is deleted.
@@ -146,8 +151,26 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Inventory again and compare, after `apply`.
-    Verify,
+    /// Inventory the target again after `apply` and check it against the source:
+    /// every source message must have a healthy copy in its folder, and nothing
+    /// set aside may be the only copy. Only reads.
+    Verify {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the source inventory. The new target inventory
+        /// goes there as `target.after.jsonl`.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// Which source inventory to check against.
+        #[arg(long, value_enum, default_value = "outlook")]
+        source: audit_cmd::SourceKind,
+        /// First day real mail reached the target, `YYYY-MM-DD` (UTC).
+        #[arg(long, value_name = "DATE")]
+        cutoff: String,
+        /// Reuse `target.after.jsonl` instead of reading the mailbox again.
+        #[arg(long)]
+        reuse_inventory: bool,
+    },
     /// Manage the quarantine folder.
     #[command(subcommand)]
     Quarantine(QuarantineCommand),
@@ -178,6 +201,23 @@ enum TargetCommand {
         /// only those a mail client shows.
         #[arg(long)]
         all_folders: bool,
+    },
+    /// Show the properties of items by id: body type and length, attachments,
+    /// dates, sender. Only reads: the items are not marked as read.
+    Show {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Item ids, as in an inventory's `key`.
+        #[arg(long = "id", value_name = "ID", required = true)]
+        ids: Vec<String>,
+        /// Also read each file attachment and show its size, first bytes and
+        /// SHA-256, and whether its content looks like its type.
+        #[arg(long)]
+        attachments: bool,
+        /// With `--attachments`, also save the files into this directory, to open
+        /// them locally.
+        #[arg(long, value_name = "DIR", requires = "attachments")]
+        save: Option<PathBuf>,
     },
 }
 
@@ -218,6 +258,12 @@ fn main() -> ExitCode {
         Command::Target(TargetCommand::Check { ews, all_folders }) => {
             report(target_check(&ews, all_folders))
         }
+        Command::Target(TargetCommand::Show {
+            ews,
+            ids,
+            attachments,
+            save,
+        }) => report(target_show(&ews, &ids, attachments, save.as_deref())),
         Command::Backup { ews, out } => report(backup(&ews, out)),
         Command::Inventory {
             work,
@@ -265,7 +311,10 @@ fn main() -> ExitCode {
             source,
             cutoff,
             out,
-        } => report(plan_cmd::plan_command(&work, source, &cutoff, &ews, &out)),
+            after,
+        } => report(plan_cmd::plan_command(
+            &work, source, &cutoff, &ews, &after, &out,
+        )),
         Command::Apply {
             ews,
             plan,
@@ -284,6 +333,19 @@ fn main() -> ExitCode {
             limit,
             dry_run,
         )),
+        Command::Verify {
+            ews,
+            work,
+            source,
+            cutoff,
+            reuse_inventory,
+        } => report(verify_cmd::verify_command(
+            &work,
+            source,
+            &cutoff,
+            &ews,
+            reuse_inventory,
+        )),
         command => {
             eprintln!("ecm: {command:?} is not implemented yet");
             ExitCode::from(2)
@@ -299,6 +361,95 @@ fn report(outcome: Result<(), String>) -> ExitCode {
             eprintln!("ecm: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn target_show(
+    ews: &EwsArgs,
+    ids: &[String],
+    attachments: bool,
+    save: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let client = connect(ews)?;
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let items = client.item_properties(&ids).map_err(|e| e.to_string())?;
+    for (id, item) in ids.iter().zip(items) {
+        println!("{id}");
+        match item {
+            Ok(properties) => {
+                for (name, value) in properties {
+                    let value: String = value.chars().take(120).collect();
+                    println!("  {name:<24} {value}");
+                }
+            }
+            Err(error) => println!("  error: {error}"),
+        }
+        if attachments {
+            for file in client.attachments(id).map_err(|e| e.to_string())? {
+                let head: String = file
+                    .content
+                    .iter()
+                    .take(8)
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let tail: String = file.content[file.content.len().saturating_sub(4)..]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                println!(
+                    "  file {:<40} {:<24} {:>9} bytes  starts {head}  ends {tail}  {}  sha256 {}",
+                    file.name,
+                    file.content_type,
+                    file.content.len(),
+                    content_check(&file.name, &file.content),
+                    sha256_hex(&file.content)
+                );
+                if let Some(dir) = save {
+                    let name: String = file
+                        .name
+                        .chars()
+                        .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
+                        .collect();
+                    let path = dir.join(name);
+                    std::fs::create_dir_all(dir)
+                        .and_then(|()| std::fs::write(&path, &file.content))
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Whether a file's first bytes match what its extension promises, for common
+/// types.
+fn content_check(name: &str, content: &[u8]) -> &'static str {
+    let lower = name.to_lowercase();
+    let expected: &[&[u8]] = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        &[b"\xFF\xD8\xFF"]
+    } else if lower.ends_with(".png") {
+        &[b"\x89PNG"]
+    } else if lower.ends_with(".gif") {
+        &[b"GIF8"]
+    } else if lower.ends_with(".pdf") {
+        &[b"%PDF"]
+    } else if lower.ends_with(".zip") || lower.ends_with(".docx") || lower.ends_with(".xlsx") {
+        &[b"PK"]
+    } else {
+        return "type not checked";
+    };
+    if expected.iter().any(|magic| content.starts_with(magic)) {
+        "looks valid"
+    } else {
+        "DOES NOT LOOK VALID"
     }
 }
 

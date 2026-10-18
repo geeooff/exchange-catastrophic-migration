@@ -479,6 +479,7 @@ fn item_record(key: String, folder: &str, properties: &BTreeMap<u16, PropertyVal
         read: integer(PR_MESSAGE_FLAGS).map(|flags| flags & i64::from(MSGFLAG_READ) != 0),
         has_headers: Some(text(PR_TRANSPORT_MESSAGE_HEADERS).is_some()),
         // PSTs rarely store PR_NATIVE_BODY_INFO: the richest body present tells.
+        body_empty: None,
         native_body: integer(PR_NATIVE_BODY_INFO)
             .and_then(|n| u8::try_from(n).ok())
             .or_else(|| {

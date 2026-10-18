@@ -174,6 +174,7 @@ const INVENTORY_PROPERTIES: &str = concat!(
     r#"<t:FieldURI FieldURI="item:DateTimeCreated"/>"#,
     r#"<t:FieldURI FieldURI="item:Size"/>"#,
     r#"<t:FieldURI FieldURI="item:HasAttachments"/>"#,
+    r#"<t:FieldURI FieldURI="item:Preview"/>"#,
     r#"<t:FieldURI FieldURI="message:InternetMessageId"/>"#,
     r#"<t:FieldURI FieldURI="message:From"/>"#,
     r#"<t:FieldURI FieldURI="message:IsRead"/>"#,
@@ -241,6 +242,8 @@ fn inventory_record(item: &Element, folder: &str) -> Result<ItemRecord> {
         read: flag("IsRead"),
         has_headers: is_message.then_some(has_headers),
         native_body,
+        // Exchange leaves `Preview` out when the body has no text.
+        body_empty: is_message.then(|| text("Preview").is_none()),
     })
 }
 
@@ -297,7 +300,7 @@ mod tests {
         let fake = FakeTransport::new([(
             200,
             soap(
-                r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true"><t:Items><t:Message><t:ItemId Id="OK"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Order shipped</t:Subject><t:DateTimeReceived>2024-12-30T03:19:13Z</t:DateTimeReceived><t:Size>236262</t:Size><t:DateTimeSent>2024-12-30T03:19:09Z</t:DateTimeSent><t:DateTimeCreated>2026-09-01T00:07:02Z</t:DateTimeCreated><t:HasAttachments>false</t:HasAttachments><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x7d" PropertyType="String"/><t:Value>Received: from mx</t:Value></t:ExtendedProperty><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/><t:Value>3</t:Value></t:ExtendedProperty><t:InternetMessageId>&lt;a@example.test&gt;</t:InternetMessageId><t:From><t:Mailbox><t:Name>Shop</t:Name><t:EmailAddress>Orders@Example.TEST</t:EmailAddress></t:Mailbox></t:From><t:IsRead>true</t:IsRead></t:Message><t:Message><t:ItemId Id="BROKEN"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Photos</t:Subject><t:DateTimeReceived>2026-09-01T05:02:38Z</t:DateTimeReceived><t:DateTimeSent>2021-10-23T21:31:00Z</t:DateTimeSent><t:InternetMessageId>&lt;b@example.test&gt;</t:InternetMessageId><t:IsRead>false</t:IsRead></t:Message></t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#,
+                r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true"><t:Items><t:Message><t:ItemId Id="OK"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Order shipped</t:Subject><t:DateTimeReceived>2024-12-30T03:19:13Z</t:DateTimeReceived><t:Size>236262</t:Size><t:DateTimeSent>2024-12-30T03:19:09Z</t:DateTimeSent><t:DateTimeCreated>2026-09-01T00:07:02Z</t:DateTimeCreated><t:HasAttachments>false</t:HasAttachments><t:Preview>Your order is on its way</t:Preview><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x7d" PropertyType="String"/><t:Value>Received: from mx</t:Value></t:ExtendedProperty><t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/><t:Value>3</t:Value></t:ExtendedProperty><t:InternetMessageId>&lt;a@example.test&gt;</t:InternetMessageId><t:From><t:Mailbox><t:Name>Shop</t:Name><t:EmailAddress>Orders@Example.TEST</t:EmailAddress></t:Mailbox></t:From><t:IsRead>true</t:IsRead></t:Message><t:Message><t:ItemId Id="BROKEN"/><t:ItemClass>IPM.Note</t:ItemClass><t:Subject>Photos</t:Subject><t:DateTimeReceived>2026-09-01T05:02:38Z</t:DateTimeReceived><t:DateTimeSent>2021-10-23T21:31:00Z</t:DateTimeSent><t:InternetMessageId>&lt;b@example.test&gt;</t:InternetMessageId><t:IsRead>false</t:IsRead></t:Message></t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#,
             ),
         )]);
         let items = EwsClient::new(&fake).inventory_items("F", "").unwrap();
@@ -315,6 +318,10 @@ mod tests {
         assert_eq!(broken.sender, None);
         assert_eq!(broken.has_headers, Some(false));
         assert_eq!(broken.read, Some(false));
+        assert_eq!(
+            (ok.body_empty, broken.body_empty),
+            (Some(false), Some(true))
+        );
         assert!(fake.requests.borrow()[0].contains(r#"PropertyTag="0x007D""#));
     }
 

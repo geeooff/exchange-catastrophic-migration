@@ -48,6 +48,10 @@ pub struct ItemRecord {
     /// Native body format (`PR_NATIVE_BODY_INFO`): 1 plain text, 2 RTF, 3 HTML.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_body: Option<u8>,
+    /// Whether the body has no text (its preview is empty). A copy with an empty
+    /// body whose source has one lost its content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_empty: Option<bool>,
 }
 
 impl ItemRecord {
