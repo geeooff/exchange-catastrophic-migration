@@ -171,12 +171,13 @@ property.
 | M0 ✅ | Workspace, CI (fmt, clippy, tests), contribution guide | CI is green on an empty skeleton |
 | M1 ✅ | `source check` on PST | Folder tree and item counts match what Outlook shows for a test PST; checksum unchanged after the run |
 | M2 ✅ | `target check` and `backup` over EWS with NTLM | Authenticates to an Exchange 2019 server that only offers Negotiate/NTLM; a backup can be restored to a test mailbox |
-| M3 (messages ✅) | Spike: re-upload fidelity, in a dedicated `ecm-test` folder (`ecm fidelity-test`). Done for messages: backup → `UploadItems` and Outlook.com MIME → `CreateItem` match their reference on every compared property. Still to do: PST messages (no MIME in a PST), appointments, contacts, tasks | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
+| M3 ✅ | Spike: re-upload fidelity, in a dedicated `ecm-test` folder (`ecm fidelity-test`). Messages: backup → `UploadItems` and Outlook.com MIME → `CreateItem` match their reference on every compared property; PST messages are rebuilt as MIME (`ecm plan-pst`). Calendar items, contacts and tasks are created as typed EWS items from Graph (`ecm plan-pim`); notes from the PST (`ecm plan-notes`) | For each item type, an item uploaded from a PST is identical to the original on every property we care about (property-by-property diff) |
 | M4 ✅ | `inventory` + `audit` | CSV report with classes and defects; tested on synthetic damaged mailboxes |
-| M5 (code ✅) | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
-| M6 | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
+| M5 ✅ | `plan` + `apply` + journal + quarantine | Interrupting and running again gives the same result; `--dry-run` changes nothing |
+| M6 ✅ | `verify` | After `apply`, a second audit finds no Degraded, Missing or Duplicate items |
 | M7 | Exchange (EWS) as a source | Same results as with a PST of the same mailbox |
-| M7b | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
+| M7b ✅ | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
+| M7c ✅ | Calendar, contacts and photos, tasks, notes, inbox rules (`plan-pim`, `plan-contact-photos`, `plan-notes`, `plan-rules`) | Each type is copied without duplicates and checked on the target |
 | M8 | Release 0.1 | Documentation, binaries for Windows x64 |
 
 ## 8. Testing
@@ -211,8 +212,18 @@ property.
 - A PST export can be incomplete. On a real mailbox, about 3,000 sent items existed
   only as damaged copies on the target. Items with no source match are therefore
   never quarantined by default: they are reported as `unmatched` for review.
-- How much of the PST format `outlook-pst` exposes: named properties, attachments,
-  embedded messages, compressed RTF bodies, recurrence data. To check in M1.
+- `outlook-pst` gives properties, recipients and attachments, enough to rebuild a
+  message as MIME. Messages with only a compressed RTF body cannot be rebuilt (MIME
+  has no RTF) and are left as they are; a few messages fail with "Missing
+  PidTagAttachMethod". PST subjects can start with the MAPI prefix-length marker (SOH
+  and a length), which must be stripped before matching.
+- Migration copies that look healthy can still be damaged: emptied bodies (found with
+  the EWS `item:Preview` and Graph `bodyPreview`), every LF byte of attachments turned
+  into CRLF, sent dates with day and month swapped, Message-IDs rewritten by the
+  migration's servers. They are never trusted: each is replaced from a source.
+- Outlook.com MIME of some sent items lacks the Message-ID, or names the sender by its
+  internal Exchange address (`IMCEAEX-…`). The PST copy, with a given sender, fixes
+  them.
 - EWS limits on hosted Exchange: throttling, maximum request size (large attachments).
 - Some properties can only be set at creation, so some fixes require a re-upload.
 - Recurring appointments with exceptions are the hardest item type to re-create

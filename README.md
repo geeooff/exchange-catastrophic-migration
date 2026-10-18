@@ -8,32 +8,49 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: early development.** What works so far:
->
-> - `ecm source check --pst <file>`: a PST's folder tree and counts, with proof the
->   file was not modified.
-> - `ecm target check --ews <url>`: an Exchange mailbox's folder tree, counts and sizes
->   over EWS (NTLM/Negotiate, Windows only).
-> - `ecm backup --ews <url> --out <dir>`: a resumable full-fidelity export
->   (`ExportItems`) of the mailbox.
-> - `ecm inventory` and `ecm audit`: match a PST with a mailbox item by item and report
->   what is ok, misplaced, damaged, missing, duplicated, new or unmatched (CSV).
-> - `ecm inventory --outlook-com --client-id <id>`: an Outlook.com mailbox as a second
->   source, read through Microsoft Graph after a browser sign-in (`ecm audit --source outlook`).
-> - `ecm plan` and `ecm apply`: a reviewable plan (create folders, re-create damaged
->   or missing messages from Outlook.com, move misplaced ones, move duplicates and
->   damaged copies to a quarantine folder), applied in journaled, resumable steps.
->   Nothing is deleted.
-> - `ecm fidelity-test`: re-creates a few items in an `ecm-test` folder (from a backup and
->   from Outlook.com) and compares them property by property. It writes only into that folder.
->
-> See [docs/plan.md](docs/plan.md).
+> **Status: used on a real mailbox, not released yet.** It repaired a mailbox of
+> about 21,000 messages that a migration had copied four times, with emptied bodies,
+> corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
 
-## What it will do
+## How it works
 
-- **Read a trusted source**, never writing to it:
-  - a Unicode PST file (e.g. an export from Outlook.com or Microsoft 365), or
-  - another Exchange mailbox over EWS.
+Every step but `apply` only reads. `apply` runs a plan file you have reviewed,
+journals each step and resumes where it stopped.
+
+1. **Look**: `ecm source check --pst <file>` and `ecm target check --ews <url>` show
+   both folder trees and counts. `ecm backup --ews <url> --out <dir>` exports the whole
+   target first (`ExportItems`, resumable).
+2. **Inventory and audit**: `ecm inventory` reads a PST (`--pst`), the target (`--ews`)
+   and/or Outlook.com through Microsoft Graph (`--outlook-com --client-id <id>`, browser
+   sign-in). `ecm audit` matches them item by item and reports what is ok, misplaced,
+   damaged, missing, duplicated, new or unmatched (CSV).
+3. **Plan**: each command writes a JSON Lines plan.
+   - `ecm plan`: create folders, re-create damaged or missing messages from
+     Outlook.com, move misplaced copies, move duplicates and damaged copies to a
+     quarantine folder. `--after <plan>` replaces copies an earlier plan moved.
+   - `ecm plan-pst`: re-create from a PST, rebuilt as MIME with the original headers,
+     bodies, attachments and S/MIME signed entities, the messages the target lacks or
+     earlier plans made badly.
+   - `ecm plan-pim`, `ecm plan-contact-photos`, `ecm plan-notes`, `ecm plan-rules`:
+     calendar (recurrences, time zones), contacts and their photos, To Do tasks,
+     sticky notes and inbox rules.
+   - `ecm plan-park`: move the reviewed `ecm-unmatched` folder into quarantine.
+   - `ecm plan-discard [--run <name>]`: once you are sure, move quarantine run folders
+     into Deleted Items, which you empty yourself. `ecm` never deletes anything.
+4. **Apply**: `ecm apply --plan <file> [--dry-run] [--limit N]`.
+5. **Verify**: `ecm verify` inventories the target again and checks every source
+   message has a healthy copy in its folder. `ecm target show --id <id> --attachments`
+   and `ecm target pim` inspect items, the calendar and the rules.
+
+`ecm fidelity-test` re-creates a few items in an `ecm-test` folder and compares them
+property by property with their reference.
+
+## What it does
+
+- **Read trusted sources**, never writing to them:
+  - a Unicode PST file (e.g. an export from Outlook.com or Microsoft 365),
+  - an Outlook.com mailbox through Microsoft Graph,
+  - another Exchange mailbox over EWS (planned).
 - **Read and repair a target** Exchange mailbox over EWS (Exchange 2013 and later,
   including hosted offers that only allow NTLM/Negotiate).
 - Cover **mail, calendar, contacts, tasks and notes**, plus the folder tree.

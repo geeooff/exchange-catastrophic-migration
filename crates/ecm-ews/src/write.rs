@@ -143,6 +143,21 @@ impl<T: Transport> EwsClient<T> {
             .ok_or_else(|| Error::MalformedResponse("CreateFolder returned no folder id".into()))
     }
 
+    /// Moves a folder, with everything in it, into the Deleted Items folder. The
+    /// user empties it, or not: nothing is deleted here.
+    pub fn move_folder_to_deleted_items(&self, folder_id: &str) -> Result<()> {
+        let body = format!(
+            r#"<m:MoveFolder><m:ToFolderId><t:DistinguishedFolderId Id="deleteditems"/></m:ToFolderId><m:FolderIds><t:FolderId Id="{}"/></m:FolderIds></m:MoveFolder>"#,
+            escape(folder_id)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("MoveFolder returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
     /// Moves items to a folder. Nothing is deleted. Returns, per item, its new id
     /// (a moved item gets a new id) or the error.
     pub fn move_items(&self, ids: &[&str], folder_id: &str) -> Result<Vec<Result<String>>> {
@@ -404,6 +419,20 @@ mod tests {
             .create_inbox_rule("<t:Rule><t:DisplayName>x</t:DisplayName></t:Rule>")
             .unwrap();
         assert!(fake.requests.borrow()[1].contains("<t:CreateRuleOperation><t:Rule><t:DisplayName>x</t:DisplayName></t:Rule></t:CreateRuleOperation>"));
+    }
+
+    #[test]
+    fn moves_a_folder_to_deleted_items() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:MoveFolderResponse><m:ResponseMessages><m:MoveFolderResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Folders><t:Folder><t:FolderId Id="Q2"/></t:Folder></m:Folders></m:MoveFolderResponseMessage></m:ResponseMessages></m:MoveFolderResponse>"#,
+            ),
+        )]);
+        EwsClient::new(&fake)
+            .move_folder_to_deleted_items("Q1")
+            .unwrap();
+        assert!(fake.requests.borrow()[0].contains(r#"<m:MoveFolder><m:ToFolderId><t:DistinguishedFolderId Id="deleteditems"/></m:ToFolderId><m:FolderIds><t:FolderId Id="Q1"/></m:FolderIds></m:MoveFolder>"#));
     }
 
     #[test]
