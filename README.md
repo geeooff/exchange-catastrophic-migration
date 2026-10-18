@@ -8,7 +8,7 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: used on a real mailbox, not released yet.** It repaired a mailbox of
+> **Status: 0.1, used on a real mailbox.** It repaired a mailbox of
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
 
@@ -61,6 +61,26 @@ property by property with their reference.
 - Cover **mail, calendar, contacts, tasks and notes**, plus the folder tree.
 - Work in safe stages: `inventory` → `audit` (report) → `plan` (reviewable actions) →
   `apply` (journaled, resumable) → `verify`.
+
+## Install
+
+Windows x64 only for now (WinHTTP, SSPI and the Credential Manager). Download
+`ecm-vX.Y.Z-windows-x64.zip` from the
+[releases](https://github.com/geeooff/exchange-catastrophic-migration/releases), check
+it against its `.sha256`, and unzip `ecm.exe` anywhere. To build it yourself:
+`cargo build --release` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+- **Exchange (EWS)**: store the mailbox password in the Windows Credential Manager,
+  once: `cmdkey /generic:ecm:<host> /user:<address> /pass` (the host of the EWS URL).
+  `ecm` reads it from there and never asks for it.
+- **Outlook.com (Microsoft Graph)**: register an application in Microsoft Entra
+  (accounts in any identity provider or personal Microsoft accounts, public client
+  flows allowed, delegated `Mail.Read`, `Contacts.Read`, `Calendars.Read`,
+  `Tasks.Read`, `User.Read`, and `MailboxSettings.Read` for inbox rules), then pass its
+  application id with `--client-id`. You sign in in your browser with a code `ecm`
+  shows; tokens stay in memory.
+- Work files (inventories, plans, journals, reports) contain mailbox data: keep them
+  private.
 
 ## Safety principles
 

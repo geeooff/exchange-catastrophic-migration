@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-audit"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ecm-model",
  "serde",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "clap",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-ews"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "ecm-http",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-graph"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ecm-http",
  "ecm-model",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-http"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "thiserror",
  "windows",
@@ -228,14 +228,14 @@ dependencies = [
 
 [[package]]
 name = "ecm-model"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ecm-pst"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "ecm-model",
@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "ecm-store"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ecm-model",
  "serde_json",

@@ -19,7 +19,7 @@ use ecm_model::FolderSummary;
 
 /// Audit and repair an Exchange mailbox after a botched migration.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(name = "ecm", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
