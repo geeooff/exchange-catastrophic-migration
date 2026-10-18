@@ -71,3 +71,7 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   each Graph event again with `Prefer: outlook.timezone` in its own zone.
 - `GetInboxRules`/`UpdateInboxRules` answer without `ResponseMessages`. Graph returns
   client-only Outlook rules (alerts) with `actions` and `conditions` null.
+- The migration also mangled sent dates (day and month swapped, seconds lost, hours
+  shifted) and rewrote Message-IDs (`…@gra-omtapp10`). Outlook.com MIME of sent items
+  can name the sender `IMCEAEX-…@…prod.outlook.com`. PST messages with only an RTF
+  body cannot be rebuilt as MIME.

@@ -27,16 +27,30 @@ use crate::{
     verify_cmd::VERIFIED_INVENTORY,
 };
 
+/// What earlier plans made that a PST plan may replace.
+pub struct Replacements<'a> {
+    /// Applied plans whose re-created messages may be replaced.
+    pub after: &'a [std::path::PathBuf],
+    /// Mailbox written as an empty or address-less `From`.
+    pub sender: Option<&'a str>,
+    /// Only replace; do not re-create messages the target lacks.
+    pub only: bool,
+}
+
 /// Writes the plan. Reads the PST, read-only, and checks it did not change.
 pub fn plan_pst_command(
     ews: &EwsArgs,
     work: &Path,
     pst: &Path,
     cutoff: &str,
-    after: &[std::path::PathBuf],
-    sender: Option<&str>,
+    replacements: &Replacements<'_>,
     out: &Path,
 ) -> Result<(), String> {
+    let Replacements {
+        after,
+        sender,
+        only: replacements_only,
+    } = *replacements;
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
         .ok_or_else(|| format!("invalid --cutoff {cutoff:?}: expected YYYY-MM-DD"))?;
     let mut source = read_inventory(&work.join(SOURCE_INVENTORY)).map_err(|e| e.to_string())?;
@@ -67,6 +81,11 @@ pub fn plan_pst_command(
         &HashSet::new(),
         &run,
     );
+    if replacements_only {
+        // Messages missing now may have been deleted by the user since: only
+        // the replacements below are wanted.
+        actions.retain(|action| matches!(action, Action::CreateFolder { .. }));
+    }
 
     // Messages an earlier plan re-created from a source that lost their
     // Message-ID or sender: the PST's own copy replaces them, and every copy
@@ -91,7 +110,14 @@ pub fn plan_pst_command(
                         // A signed message rebuilt before signed entities were
                         // handled came back without a body.
                         || source[*s].class.starts_with("IPM.Note.SMIME")
-                            && target[index].body_empty == Some(true)) =>
+                            && target[index].body_empty == Some(true)
+                        // Sent items whose Outlook.com MIME named the sender by its
+                        // internal Exchange address (IMCEAEX-...).
+                        || sender.is_some()
+                            && target[index]
+                                .sender
+                                .as_deref()
+                                .is_some_and(|s| s.starts_with("imceaex-"))) =>
             {
                 replace.push(*s);
                 copies.entry(*s).or_default().push(index);
@@ -144,6 +170,12 @@ pub fn plan_pst_command(
                 continue;
             };
             match reader.message_content(key) {
+                Ok(content) if !ecm_pst::content::has_body(&content) => {
+                    failed.push(format!(
+                        "{to}: {subject:?}: no text or HTML body in the PST (RTF only)"
+                    ));
+                    dropped.insert(step);
+                }
                 Ok(content) => {
                     skipped_attachments += content.skipped_attachments;
                     let mime = ecm_pst::content::to_mime_with(&content, sender);

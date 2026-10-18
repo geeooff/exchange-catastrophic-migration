@@ -83,6 +83,75 @@ pub fn plan_command(
     Ok(())
 }
 
+/// Writes a plan moving everything in `ecm-unmatched` to a quarantine run
+/// folder, once reviewed. Only items an applied plan (`after`) moved there are
+/// moved again. Uses the work directory's `target.after.jsonl`. Only reads.
+pub fn park_command(
+    ews: &EwsArgs,
+    work: &Path,
+    after: &[PathBuf],
+    out: &Path,
+) -> Result<(), String> {
+    use ecm_audit::plan::{QUARANTINE_FOLDER, UNMATCHED_FOLDER};
+
+    let target = read_inventory(&work.join(crate::verify_cmd::VERIFIED_INVENTORY))
+        .map_err(|e| e.to_string())?;
+    let mut moved = HashSet::new();
+    for plan in after {
+        moved.extend(moved_items(plan)?);
+    }
+    let client = connect(ews)?;
+    let (_, existing) = folder_map(&client)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let run = format_utc(now).replace([' ', ':'], "-");
+    let quarantine = path::join(&path::join("", QUARANTINE_FOLDER), &run);
+
+    let mut actions = Vec::new();
+    for folder in [path::join("", QUARANTINE_FOLDER), quarantine.clone()] {
+        if !existing.contains(&folder) {
+            actions.push(Action::CreateFolder { path: folder });
+        }
+    }
+    let mut left = 0;
+    for item in target.iter().filter(|item| {
+        path::split(&item.folder).first().map(String::as_str) == Some(UNMATCHED_FOLDER)
+    }) {
+        if moved.contains(&item.key) {
+            actions.push(Action::Move {
+                item: item.key.clone(),
+                to: quarantine.clone(),
+                reason: "unmatched".into(),
+                requires: None,
+            });
+        } else {
+            left += 1;
+        }
+    }
+
+    let mut text = String::new();
+    for action in &actions {
+        text.push_str(&serde_json::to_string(action).map_err(|e| e.to_string())?);
+        text.push('\n');
+    }
+    fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("Plan {run}: {} steps into {}", actions.len(), out.display());
+    for (kind, n) in counts(&actions) {
+        println!("  {kind:<14} {n:>7}");
+    }
+    if left > 0 {
+        println!(
+            "{left} items in {UNMATCHED_FOLDER} were not put there by an applied plan: left alone."
+        );
+    }
+    println!(
+        "Nothing was changed. Review the plan, then run `ecm apply --plan {} --dry-run`.",
+        out.display()
+    );
+    Ok(())
+}
+
 /// Ids of the items an applied plan moved, from its journal (a moved item gets a
 /// new id, which the journal records).
 fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {

@@ -262,8 +262,8 @@ pub fn to_mime(content: &MessageContent) -> Vec<u8> {
 }
 
 /// Like [`to_mime`], writing `sender` (a mailbox, e.g. `Name <address>`) as the
-/// `From` field when the message has none or an empty one, as sent items
-/// synchronized by Outlook sometimes do.
+/// `From` field when the message has none, an empty one or one without an
+/// address, as sent items synchronized by Outlook sometimes do.
 pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
     let mut out = String::new();
     match content.headers.as_deref() {
@@ -282,9 +282,8 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
                 }
                 has_message_id |= name == "message-id";
                 if name == "from" {
-                    let empty = field
-                        .split_once(':')
-                        .is_none_or(|(_, v)| v.trim().is_empty());
+                    // Empty, or a display name without an address.
+                    let empty = field.split_once(':').is_none_or(|(_, v)| !v.contains('@'));
                     match (empty, sender) {
                         (true, Some(sender)) => {
                             out.push_str(&format!("From: {sender}\r\n"));
@@ -307,12 +306,21 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
         }
         None => {
             let headers = synthesized_headers(content);
-            if !headers.contains("From: ")
-                && let Some(sender) = sender
-            {
+            let mut has_from = false;
+            for line in headers.split_inclusive("\r\n") {
+                if let Some(value) = line.strip_prefix("From: ") {
+                    match sender.filter(|_| !value.contains('@')) {
+                        Some(sender) => out.push_str(&format!("From: {sender}\r\n")),
+                        None => out.push_str(line),
+                    }
+                    has_from = true;
+                } else {
+                    out.push_str(line);
+                }
+            }
+            if !has_from && let Some(sender) = sender {
                 out.push_str(&format!("From: {sender}\r\n"));
             }
-            out.push_str(&headers);
         }
     }
     // A clear-signed (S/MIME) message: the store keeps the whole signed MIME
@@ -362,6 +370,18 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
     }
     out.push_str(&format!("\r\n--{boundary}--\r\n"));
     out.into_bytes()
+}
+
+/// Whether MIME rebuilt from `content` keeps a body: a text or HTML one, or a
+/// signed entity. A message with only an RTF body (`PR_RTF_COMPRESSED`) would
+/// lose it, since MIME has no RTF.
+pub fn has_body(content: &MessageContent) -> bool {
+    content
+        .text
+        .as_deref()
+        .is_some_and(|t| !t.trim().is_empty())
+        || content.html.is_some()
+        || signed_entity(content).is_some()
 }
 
 /// The signed MIME entity of a clear-signed message, kept as an attachment.
@@ -638,6 +658,21 @@ mod tests {
         ));
         let kept = String::from_utf8(to_mime(&content)).unwrap();
         assert!(kept.starts_with("To: <a@example.test>\r\nFrom:\r\nSubject: Zeus\r\n"));
+        let named = MessageContent {
+            headers: Some("From: Me\r\nSubject: Zeus\r\n\r\n".into()),
+            ..content
+        };
+        let mime = String::from_utf8(to_mime_with(&named, Some("Me <me@example.test>"))).unwrap();
+        assert!(mime.starts_with("From: Me <me@example.test>\r\nSubject: Zeus\r\n"));
+        let bare = MessageContent {
+            headers: None,
+            sender_name: Some("Me".into()),
+            subject: Some("Zeus".into()),
+            text: Some("x".into()),
+            ..Default::default()
+        };
+        let mime = String::from_utf8(to_mime_with(&bare, Some("Me <me@example.test>"))).unwrap();
+        assert!(mime.starts_with("From: Me <me@example.test>\r\nSubject: Zeus\r\n"));
     }
 
     #[test]
