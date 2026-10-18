@@ -152,6 +152,56 @@ pub fn park_command(
     Ok(())
 }
 
+/// Writes a plan moving quarantine run folders (all of them, or those named)
+/// into Deleted Items, where the user empties them. Only reads.
+pub fn discard_command(ews: &EwsArgs, runs: &[String], out: &Path) -> Result<(), String> {
+    use ecm_audit::plan::QUARANTINE_FOLDER;
+
+    let client = connect(ews)?;
+    let tree = client
+        .folder_tree("msgfolderroot")
+        .map_err(|e| e.to_string())?;
+    let mut actions = Vec::new();
+    let mut total = 0;
+    for (folder_path, folder) in tree.with_paths() {
+        let names = path::split(&folder_path);
+        if names.len() != 2 || names[0] != QUARANTINE_FOLDER {
+            continue;
+        }
+        if !runs.is_empty() && !runs.contains(&names[1]) {
+            continue;
+        }
+        println!("  {folder_path}: {} items", folder.total_count);
+        total += folder.total_count;
+        actions.push(Action::DiscardFolder {
+            path: folder_path,
+            items: folder.total_count,
+        });
+    }
+    if !runs.is_empty() && actions.len() != runs.len() {
+        return Err(format!(
+            "some runs were not found under {QUARANTINE_FOLDER}: asked {}, found {}",
+            runs.len(),
+            actions.len()
+        ));
+    }
+    let mut text = String::new();
+    for action in &actions {
+        text.push_str(&serde_json::to_string(action).map_err(|e| e.to_string())?);
+        text.push('\n');
+    }
+    fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!(
+        "Plan: {} folders, {total} items, into Deleted Items: {}",
+        actions.len(),
+        out.display()
+    );
+    println!(
+        "Nothing was changed. After `ecm apply`, empty Deleted Items yourself when you are sure."
+    );
+    Ok(())
+}
+
 /// Ids of the items an applied plan moved, from its journal (a moved item gets a
 /// new id, which the journal records).
 fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
@@ -532,6 +582,21 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         .create_from_mime(&folder, &mime?, &extended)
                         .map_err(|e| e.to_string())
                 })
+            }
+            Action::DiscardFolder { path, .. } => {
+                let parked = path::split(path).first().map(String::as_str)
+                    == Some(ecm_audit::plan::QUARANTINE_FOLDER)
+                    && path::split(path).len() == 2;
+                if parked {
+                    self.folder_id(path).and_then(|id| {
+                        self.client
+                            .move_folder_to_deleted_items(&id)
+                            .map(|()| path.clone())
+                            .map_err(|e| e.to_string())
+                    })
+                } else {
+                    Err(format!("{path} is not a quarantine run folder"))
+                }
             }
             Action::CreateRule { name, rule } => self.resolve_folders(rule).and_then(|rule| {
                 self.client

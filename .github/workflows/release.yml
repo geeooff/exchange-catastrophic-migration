@@ -1,0 +1,52 @@
+name: Release
+
+# A tag `vX.Y.Z` builds the Windows x64 binary with the same checks as CI and
+# publishes it as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install
+
+      # The same checklist as CI, then a release build.
+      - name: Test and build
+        shell: pwsh
+        run: .\scripts\build.ps1 build
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "ecm-$env:GITHUB_REF_NAME-windows-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item target\release\ecm.exe, README.md, LICENSE $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
+            Set-Content "$name.zip.sha256"
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = "ecm-$env:GITHUB_REF_NAME-windows-x64"
+          gh release create $env:GITHUB_REF_NAME "$name.zip" "$name.zip.sha256" `
+            --title $env:GITHUB_REF_NAME --generate-notes --verify-tag

@@ -22,7 +22,8 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   for writing. Use `ecm_pst::PstSource`, which opens the file read-only and shares
   read access only.
 - On a target: no hard delete (quarantine instead), and changes only through
-  `plan`/`apply`, with the user's go-ahead for each `apply` run. The single exception
+  `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
+  folders leave only through `plan-discard`, into Deleted Items: the user empties it. The single exception
   is `ecm fidelity-test`, which only creates items, only in the `ecm-test` folder.
 - Plans only move items from the top of the target mailbox (migration debris).
 - Never track mailbox data or private notes. Exceptions: fixtures under
@@ -42,6 +43,8 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   the same script on `windows-latest`.
 - One branch and one PR per milestone. `main` is protected (required check `build`).
   Dependabot merges compatible crate updates on its own.
+- A tag `vX.Y.Z` publishes a Windows x64 release (`release.yml`): tag only with the
+  user's go-ahead.
 - Agents may push branches, open PRs, fix CI failures and enable auto-merge
   (`gh pr merge --auto --merge`). Never bypass a required check or the ruleset.
 - Commit only when asked. Messages say what and why, ending with the

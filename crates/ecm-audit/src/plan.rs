@@ -111,6 +111,13 @@ pub enum Action {
         /// The item, as EWS XML (`<t:CalendarItem>`, `<t:Contact>`, `<t:Task>`).
         item: String,
     },
+    /// Move a quarantine run folder into Deleted Items, for the user to empty.
+    DiscardFolder {
+        /// Folder path, under the quarantine folder.
+        path: String,
+        /// Items it holds, for reports.
+        items: u64,
+    },
     /// Create an inbox rule from its EWS XML (`<t:Rule>`).
     CreateRule {
         /// Rule name, for reports.
@@ -148,6 +155,7 @@ impl Action {
             },
             Action::ContactPhoto { .. } => "contact-photo",
             Action::CreateRule { .. } => "create-rule",
+            Action::DiscardFolder { .. } => "discard-folder",
         }
     }
 }

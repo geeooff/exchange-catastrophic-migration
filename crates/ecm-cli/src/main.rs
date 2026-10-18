@@ -292,9 +292,19 @@ enum Command {
         #[arg(long)]
         reuse_inventory: bool,
     },
-    /// Manage the quarantine folder.
-    #[command(subcommand)]
-    Quarantine(QuarantineCommand),
+    /// Write a plan moving quarantine run folders into Deleted Items, for you to
+    /// empty when you are sure. Nothing is deleted by `ecm`. Only reads.
+    PlanDiscard {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Run folder names under `ecm-quarantine` (e.g. `2026-01-01-12-00`);
+        /// every run when left out.
+        #[arg(long = "run", value_name = "NAME")]
+        runs: Vec<String>,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -359,12 +369,6 @@ struct EwsArgs {
     /// `cmdkey /generic:ecm:HOST /user:ADDRESS /pass`.
     #[arg(long, value_name = "NAME")]
     credential: Option<String>,
-}
-
-#[derive(Debug, Subcommand)]
-enum QuarantineCommand {
-    /// Permanently delete the items quarantined by a run.
-    Purge,
 }
 
 fn main() -> ExitCode {
@@ -539,9 +543,8 @@ fn main() -> ExitCode {
             &ews,
             reuse_inventory,
         )),
-        command => {
-            eprintln!("ecm: {command:?} is not implemented yet");
-            ExitCode::from(2)
+        Command::PlanDiscard { ews, runs, out } => {
+            report(plan_cmd::discard_command(&ews, &runs, &out))
         }
     }
 }
