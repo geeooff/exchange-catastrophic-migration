@@ -282,9 +282,9 @@ pub fn plan_pst_command(
                 continue;
             };
             match reader.message_content(key) {
-                Ok(content) if !ecm_pst::content::has_body(&content) => {
+                Ok(content) if ecm_pst::content::loses_body(&content) => {
                     failed.push(format!(
-                        "{to}: {subject:?}: no text or HTML body in the PST (RTF only)"
+                        "{to}: {subject:?}: its RTF body could not be turned into HTML or text"
                     ));
                     dropped.insert(step);
                 }

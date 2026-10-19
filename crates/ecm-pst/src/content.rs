@@ -29,6 +29,7 @@ const PR_MESSAGE_DELIVERY_TIME: u16 = 0x0E06;
 const PR_MESSAGE_FLAGS: u16 = 0x0E07;
 const PR_BODY: u16 = 0x1000;
 const PR_HTML: u16 = 0x1013;
+const PR_RTF_COMPRESSED: u16 = 0x1009;
 const PR_INTERNET_MESSAGE_ID: u16 = 0x1035;
 const PR_DISPLAY_NAME: u16 = 0x3001;
 const PR_EMAIL_ADDRESS: u16 = 0x3003;
@@ -101,6 +102,11 @@ pub struct MessageContent {
     pub html: Option<Vec<u8>>,
     /// Windows code page of the HTML body (`PR_INTERNET_CPID`).
     pub code_page: Option<i32>,
+    /// Whether the HTML or text body was recovered from the RTF one.
+    pub body_from_rtf: bool,
+    /// An RTF body nothing could be recovered from, and no other body: MIME
+    /// rebuilt from the message would lose it.
+    pub rtf_lost: bool,
     /// Recipients.
     pub recipients: Vec<Recipient>,
     /// File attachments.
@@ -192,6 +198,27 @@ impl PstSource {
                     content_id: text(&properties, PR_ATTACH_CONTENT_ID),
                     data,
                 });
+            }
+        }
+        // A body kept only as RTF, or HTML a client kept only inside its RTF.
+        if let Some(PropertyValue::Binary(rtf)) = properties.get(&PR_RTF_COMPRESSED)
+            && content.html.is_none()
+            && signed_entity(&content).is_none()
+        {
+            match crate::rtf::body(rtf.buffer()) {
+                Some(crate::rtf::Body::Html(html)) => {
+                    content.html = Some(html.into_bytes());
+                    content.code_page = Some(65001);
+                    content.body_from_rtf = true;
+                }
+                Some(crate::rtf::Body::Text(text))
+                    if content.text.as_deref().is_none_or(|t| t.trim().is_empty()) =>
+                {
+                    content.text = Some(text);
+                    content.body_from_rtf = true;
+                }
+                Some(_) => {}
+                None => content.rtf_lost = !has_body(&content) && !rtf.buffer().is_empty(),
             }
         }
         Ok(content)
@@ -379,9 +406,15 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
     out.into_bytes()
 }
 
-/// Whether MIME rebuilt from `content` keeps a body: a text or HTML one, or a
-/// signed entity. A message with only an RTF body (`PR_RTF_COMPRESSED`) would
-/// lose it, since MIME has no RTF.
+/// Whether rebuilding `content` as MIME would lose its body: an RTF body nothing
+/// could be recovered from, since MIME has no RTF. A message whose body is empty
+/// (only attachments) loses nothing.
+pub fn loses_body(content: &MessageContent) -> bool {
+    content.rtf_lost
+}
+
+/// Whether the message has a body: a text or HTML one (maybe recovered from the
+/// RTF body), or a signed entity.
 pub fn has_body(content: &MessageContent) -> bool {
     content
         .text

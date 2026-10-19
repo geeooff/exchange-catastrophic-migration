@@ -229,9 +229,11 @@ property.
   only as damaged copies on the target. Items with no source match are therefore
   never quarantined by default: they are reported as `unmatched` for review.
 - `outlook-pst` gives properties, recipients and attachments, enough to rebuild a
-  message as MIME. Messages with only a compressed RTF body cannot be rebuilt (MIME
-  has no RTF) and are left as they are; a few messages fail with "Missing
-  PidTagAttachMethod". PST subjects can start with the MAPI prefix-length marker (SOH
+  message as MIME. A compressed RTF body (`compressed-rtf`, Microsoft's) is
+  de-encapsulated into the HTML or text it carries ([MS-OXRTFEX]), else read as
+  text; only an RTF body nothing comes out of keeps a message from being rebuilt.
+  Attachments `outlook-pst` cannot open ("Missing PidTagAttachMethod", an embedded
+  message without data) are left out and listed. PST subjects can start with the MAPI prefix-length marker (SOH
   and a length), which must be stripped before matching.
 - Migration copies that look healthy can still be damaged: emptied bodies (found with
   the EWS `item:Preview` and Graph `bodyPreview`), every LF byte of attachments turned

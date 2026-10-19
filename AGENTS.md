@@ -84,5 +84,7 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   client-only Outlook rules (alerts) with `actions` and `conditions` null.
 - The migration also mangled sent dates (day and month swapped, seconds lost, hours
   shifted) and rewrote Message-IDs (`…@gra-omtapp10`). Outlook.com MIME of sent items
-  can name the sender `IMCEAEX-…@…prod.outlook.com`. PST messages with only an RTF
-  body cannot be rebuilt as MIME.
+  can name the sender `IMCEAEX-…@…prod.outlook.com`. A PST message with only a
+  compressed RTF body is rebuilt from the HTML or text the RTF encapsulates
+  ([MS-OXRTFEX]), else from the RTF's text; a PST `PR_HTML` can be `Null`, and a
+  message with no body at all (only attachments) is still rebuilt.
