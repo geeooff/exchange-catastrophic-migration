@@ -36,7 +36,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   sets) followed by one `attach` step per file; the mailbox's folders are read
   once and kept in the work directory. `apply-graph` runs it, journaled and
   resumable like `apply`, renewing its token during long runs; several
-  `--plan` run in order with one sign-in.
+  `--plan` run in order with one sign-in. A file refused because the mailbox is
+  still storing the one before (a change key conflict) is sent again after a
+  pause, by Graph as by EWS.
 - `fidelity-graph`: re-create a few PST messages in the `ecm-test` folder of an
   Outlook.com mailbox through Graph, from MIME and from JSON with the properties
   only creation sets, and compare each copy with a known good one and the PST's

@@ -86,7 +86,34 @@ impl<T: Transport> GraphClient<T> {
     /// Attaches a file to a message: in one request up to
     /// [`INLINE_FILE_LIMIT`], else through an upload session. A file with a
     /// `Content-ID` is inline: the HTML body shows it.
+    ///
+    /// Right after a file, the mailbox may still be storing it: the change key
+    /// conflict it answers then passes after a pause (5 s, then 10, 20, 40).
     pub fn attach_file(
+        &self,
+        message_id: &str,
+        name: &str,
+        content_type: &str,
+        content_id: Option<&str>,
+        data: &[u8],
+    ) -> Result<()> {
+        let mut wait = std::time::Duration::from_secs(5);
+        loop {
+            match self.attach_once(message_id, name, content_type, content_id, data) {
+                Err(Error::Graph { code, message, .. })
+                    if (code == "ErrorIrresolvableConflict"
+                        || message.contains("ErrorIrresolvableConflict"))
+                        && wait <= std::time::Duration::from_secs(40) =>
+                {
+                    (self.sleep)(wait);
+                    wait *= 2;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn attach_once(
         &self,
         message_id: &str,
         name: &str,
@@ -261,6 +288,31 @@ mod tests {
         );
         assert_eq!(range(1), Some(format!("bytes 0-3276799/{size}")));
         assert_eq!(range(2), Some(format!("bytes 3276800-{}/{size}", size - 1)));
+    }
+
+    #[test]
+    fn retries_a_file_while_the_previous_one_is_being_stored() {
+        let size = super::INLINE_FILE_LIMIT + 10;
+        let conflict = r#"{"error":{"code":"ErrorIrresolvableConflict","message":"The change key passed in the request does not match the current change key for the item."}}"#;
+        let fake = FakeTransport::new([
+            (
+                200,
+                r#"{"uploadUrl":"https://outlook.office.com/upload/1"}"#.into(),
+            ),
+            (412, conflict.into()),
+            (
+                200,
+                r#"{"uploadUrl":"https://outlook.office.com/upload/2"}"#.into(),
+            ),
+            (201, "{}".into()),
+        ]);
+        GraphClient::new(&fake, "t".into())
+            .with_sleep(|_| {})
+            .attach_file("M1", "a.mp3", "audio/mpeg", None, &vec![1u8; size])
+            .unwrap();
+        let requests = fake.requests.borrow();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[3].1, "https://outlook.office.com/upload/2");
     }
 
     #[test]

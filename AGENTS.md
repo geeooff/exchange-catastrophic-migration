@@ -78,6 +78,10 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - Migration copies can look healthy and still be damaged: emptied bodies (detected
   with the EWS `item:Preview` and Graph `bodyPreview`), duplicated recipients, and
   attachments where every LF byte became CRLF. Never trust them: replace them.
+- OVH EWS refuses requests near 100 MB (HTTP 413): messages over 25 MB are created
+  without their files, then one `CreateAttachment` each. A `CreateAttachment` right
+  after another on the same item can answer `ErrorIrresolvableConflict` (change key),
+  through EWS and through Graph upload sessions alike: it passes after a pause.
 - Graph as a target: a message created from MIME stays a draft, gets the current
   time as received date, and has addresses of the account's aliases rewritten to
   its primary one. Create it from JSON instead, with `singleValueExtendedProperties`
