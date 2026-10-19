@@ -616,6 +616,34 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                             .map_err(|e| e.to_string())
                     })
             }
+            Action::Attach {
+                requires,
+                name,
+                content_type,
+                content_id,
+                data,
+            } => match self.done.get(requires).and_then(|line| line.id.clone()) {
+                // Its message was not created: retried with it.
+                None => Err("skipped".into()),
+                Some(item) => {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .map_err(|e| e.to_string())
+                        .and_then(|data| {
+                            self.client
+                                .attach_file(
+                                    &item,
+                                    name,
+                                    content_type,
+                                    content_id.as_deref(),
+                                    &data,
+                                )
+                                .map_err(|e| e.to_string())
+                        })
+                        .map(|()| item)
+                }
+            },
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)
