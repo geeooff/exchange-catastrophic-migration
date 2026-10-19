@@ -228,7 +228,7 @@ pub fn created_items(plan: &Path) -> Result<HashMap<String, bool>, String> {
         .filter_map(|(step, line)| {
             let from_pst = match actions.get(step) {
                 Some(Action::Recreate { .. }) => false,
-                Some(Action::RecreateMime { .. }) => true,
+                Some(Action::RecreateMime { .. } | Action::CreateMessage { .. }) => true,
                 _ => return None,
             };
             line.id.map(|id| (id, from_pst))
@@ -291,22 +291,22 @@ pub fn folder_map<T: ecm_ews::Transport>(
 
 /// One line of an apply journal.
 #[derive(Debug, Serialize, Deserialize)]
-struct JournalLine {
-    step: usize,
-    status: String,
+pub(crate) struct JournalLine {
+    pub(crate) step: usize,
+    pub(crate) status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
+    pub(crate) id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
-fn journal_path(plan: &Path) -> PathBuf {
+pub(crate) fn journal_path(plan: &Path) -> PathBuf {
     let mut name = plan.file_name().unwrap_or_default().to_os_string();
     name.push(".journal.jsonl");
     plan.with_file_name(name)
 }
 
-fn read_plan(plan: &Path) -> Result<Vec<Action>, String> {
+pub(crate) fn read_plan(plan: &Path) -> Result<Vec<Action>, String> {
     fs::read_to_string(plan)
         .map_err(|e| format!("{}: {e}", plan.display()))?
         .lines()
@@ -320,7 +320,7 @@ fn read_plan(plan: &Path) -> Result<Vec<Action>, String> {
 }
 
 /// Steps already done, according to the journal.
-fn read_journal(path: &Path) -> Result<HashMap<usize, JournalLine>, String> {
+pub(crate) fn read_journal(path: &Path) -> Result<HashMap<usize, JournalLine>, String> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
@@ -644,6 +644,10 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         .map(|()| item)
                 }
             },
+            Action::CreateMessage { .. } => Err(
+                "a create-message step is for Outlook.com: run the plan with `ecm apply-graph`"
+                    .into(),
+            ),
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)

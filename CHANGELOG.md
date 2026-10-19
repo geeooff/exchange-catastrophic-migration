@@ -31,6 +31,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   pages. `source show` says when a body came from RTF.
 - `check-content --outlook-com`: compare the copies in an Outlook.com mailbox
   through Microsoft Graph, files read whole and bodies judged by what they show.
+- `plan-pst --outlook-com`: a plan for an Outlook.com mailbox (Microsoft Graph),
+  each message a `create-message` step (JSON with the properties only creation
+  sets) followed by one `attach` step per file; the mailbox's folders are read
+  once and kept in the work directory. `apply-graph` runs it, journaled and
+  resumable like `apply`, renewing its token during long runs; several
+  `--plan` run in order with one sign-in.
 - `fidelity-graph`: re-create a few PST messages in the `ecm-test` folder of an
   Outlook.com mailbox through Graph, from MIME and from JSON with the properties
   only creation sets, and compare each copy with a known good one and the PST's

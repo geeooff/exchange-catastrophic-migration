@@ -87,6 +87,17 @@ pub enum Action {
         /// The message, as base64 MIME.
         mime: String,
     },
+    /// Create a message in an Outlook.com mailbox (Microsoft Graph) from its
+    /// JSON resource, which carries the properties only creation sets; its files
+    /// follow as `attach` steps.
+    CreateMessage {
+        /// Target folder path.
+        to: String,
+        /// Subject, for reports.
+        subject: Option<String>,
+        /// The message, as Graph JSON.
+        message: String,
+    },
     /// Move a target item to a folder.
     Move {
         /// Target item id.
@@ -157,7 +168,9 @@ impl Action {
     pub fn kind(&self) -> &'static str {
         match self {
             Action::CreateFolder { .. } => "create-folder",
-            Action::Recreate { .. } | Action::RecreateMime { .. } => "recreate",
+            Action::Recreate { .. }
+            | Action::RecreateMime { .. }
+            | Action::CreateMessage { .. } => "recreate",
             Action::Move { reason, .. } => match reason.as_str() {
                 "misplaced" => "move",
                 _ => "quarantine",

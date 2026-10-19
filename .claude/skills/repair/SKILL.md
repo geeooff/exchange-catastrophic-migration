@@ -32,6 +32,9 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
     For an older PST, a large restore goes in batches (`--keys <file>`, one PST key per line, about
     1,000 messages or 150 MB each), and `--rename FROM=TO` sends a folder renamed since to its new name.
     A message over 25 MB is created first, then its files one by one (`attach` steps).
+    For an Outlook.com target: `ecm plan-pst --outlook-com --client-id <id> --work <dir> …` (the work
+    directory holds `outlook.jsonl`; the folders are read once into `outlook-folders.json`), then
+    `ecm apply-graph --client-id <id> --plan <file> [--dry-run]`; check with `ecm check-content --outlook-com`.
     Copies that look healthy can still be damaged when the source they came from already was:
     `ecm check-content --ews <url> --work <dir> --pst <file> --out <dir>/damaged.csv` compares every copy
     with its PST message (emptied body, missing or changed attachment, LF turned into CRLF), then

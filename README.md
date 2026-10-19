@@ -32,7 +32,8 @@ journals each step and resumes where it stopped.
      quarantine folder. `--after <plan>` replaces copies an earlier plan moved.
    - `ecm plan-pst`: re-create from a PST, rebuilt as MIME with the original headers,
      bodies, attachments and S/MIME signed entities, the messages the target lacks or
-     earlier plans made badly.
+     earlier plans made badly. With `--outlook-com`, the target is an Outlook.com
+     mailbox through Microsoft Graph, and `ecm apply-graph` runs the plan.
    - `ecm plan-pim`, `ecm plan-contact-photos`, `ecm plan-notes`, `ecm plan-rules`:
      calendar (recurrences, time zones), contacts and their photos, To Do tasks,
      sticky notes and inbox rules.

@@ -56,6 +56,16 @@ const FOLDER_SELECT: &str = "id,displayName,childFolderCount,totalItemCount,unre
 const EXTENDED: &str = "id eq 'String 0x001A' or id eq 'Integer 0x0E08' or id eq 'Integer 0x1016'";
 
 impl<T: Transport> GraphClient<T> {
+    /// The id of a well-known folder (`inbox`, `sentitems`, `archive`…), or
+    /// `None` when the mailbox has none.
+    pub fn well_known_folder(&self, name: &str) -> Result<Option<String>> {
+        match self.get(&format!("/me/mailFolders/{}?$select=id", encode(name))) {
+            Ok(folder) => Ok(folder["id"].as_str().map(str::to_owned)),
+            Err(Error::Graph { status: 404, .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The signed-in mailbox's address.
     pub fn mailbox(&self) -> Result<String> {
         let me = self.get("/me?$select=mail,userPrincipalName")?;

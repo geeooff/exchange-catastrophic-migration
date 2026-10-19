@@ -11,6 +11,7 @@ mod cleanup_cmd;
 mod content_cmd;
 mod fidelity_cmd;
 mod graph_cmd;
+mod graph_plan_cmd;
 mod notes_cmd;
 mod pim_cmd;
 mod plan_cmd;
@@ -203,8 +204,23 @@ enum Command {
     /// the PST inventory (`source.jsonl`) and the target's `target.after.jsonl`.
     /// Only reads.
     PlanPst {
-        #[command(flatten)]
-        ews: EwsArgs,
+        /// EWS endpoint of the Exchange target (`target.after.jsonl`).
+        #[arg(long, value_name = "URL", required_unless_present = "outlook_com")]
+        ews: Option<String>,
+        /// Credential name for `--ews`, `ecm:HOST` by default.
+        #[arg(long, value_name = "NAME", requires = "ews")]
+        credential: Option<String>,
+        /// Plan for an Outlook.com mailbox through Microsoft Graph instead
+        /// (`outlook.jsonl`), to run with `ecm apply-graph`. You sign in with a
+        /// code to read its folders.
+        #[arg(long, conflicts_with = "ews", requires = "client_id")]
+        outlook_com: bool,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: Option<String>,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
         /// Work directory holding the inventories.
         #[arg(long, value_name = "DIR")]
         work: PathBuf,
@@ -375,6 +391,26 @@ enum Command {
         /// Sign-in authority for Graph.
         #[arg(long, value_name = "TENANT", default_value = "consumers")]
         tenant: String,
+        /// Run at most this many pending steps, then stop.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+        /// Only say what is left to do.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Run a plan written for an Outlook.com mailbox (`plan-pst --outlook-com`)
+    /// through Microsoft Graph, journaled and resumable like `apply`. Asks for
+    /// `Mail.ReadWrite`.
+    ApplyGraph {
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Plan file. Repeat to run several plans, in order, with one sign-in.
+        #[arg(long = "plan", value_name = "FILE", required = true)]
+        plans: Vec<PathBuf>,
         /// Run at most this many pending steps, then stop.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
@@ -650,6 +686,18 @@ fn main() -> ExitCode {
             limit,
             dry_run,
         )),
+        Command::ApplyGraph {
+            client_id,
+            tenant,
+            plans,
+            limit,
+            dry_run,
+        } => report(graph_plan_cmd::apply_graph_command(
+            &plans,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            limit,
+            dry_run,
+        )),
         Command::PlanNotes {
             ews,
             work,
@@ -678,6 +726,10 @@ fn main() -> ExitCode {
         )),
         Command::PlanPst {
             ews,
+            credential,
+            outlook_com: _,
+            client_id,
+            tenant,
             work,
             pst,
             cutoff,
@@ -688,23 +740,32 @@ fn main() -> ExitCode {
             keys,
             renames,
             damaged,
-        } => report(pst_plan_cmd::plan_pst_command(
-            &ews,
-            &work,
-            &pst,
-            &cutoff,
-            &pst_plan_cmd::Replacements {
-                after: &after,
-                sender: sender.as_deref(),
-                only: replacements_only,
-                damaged: damaged.as_deref(),
-            },
-            &pst_plan_cmd::Selection {
-                keys: keys.as_deref(),
-                renames: &renames,
-            },
-            &out,
-        )),
+        } => report({
+            let ews = ews.map(|ews| EwsArgs { ews, credential });
+            let graph = client_id.map(|client_id| audit_cmd::GraphArgs { client_id, tenant });
+            let target = match (&ews, &graph) {
+                (Some(ews), _) => pst_plan_cmd::PstTarget::Ews(ews),
+                (None, Some(graph)) => pst_plan_cmd::PstTarget::Graph(graph),
+                (None, None) => unreachable!("clap requires --ews or --outlook-com"),
+            };
+            pst_plan_cmd::plan_pst_command(
+                &target,
+                &work,
+                &pst,
+                &cutoff,
+                &pst_plan_cmd::Replacements {
+                    after: &after,
+                    sender: sender.as_deref(),
+                    only: replacements_only,
+                    damaged: damaged.as_deref(),
+                },
+                &pst_plan_cmd::Selection {
+                    keys: keys.as_deref(),
+                    renames: &renames,
+                },
+                &out,
+            )
+        }),
         Command::PlanRules {
             ews,
             client_only_as_important,
