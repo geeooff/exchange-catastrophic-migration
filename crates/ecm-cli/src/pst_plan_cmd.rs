@@ -37,6 +37,30 @@ pub struct Replacements<'a> {
     pub only: bool,
 }
 
+/// Which PST messages a plan considers, and where they go.
+pub struct Selection<'a> {
+    /// A file listing PST item keys, one per line: only those are considered,
+    /// to split a large restore into plans of a reasonable size.
+    pub keys: Option<&'a Path>,
+    /// `FROM=TO` folder renames, applied to source paths (and their sub-folders)
+    /// before they are mapped to the target, for folders renamed since.
+    pub renames: &'a [String],
+}
+
+/// A folder path with the first matching `(from, to)` rename applied to it or to
+/// the folder it is under.
+fn renamed(folder: &str, renames: &[(&str, &str)]) -> String {
+    for (from, to) in renames {
+        if folder == *from {
+            return (*to).to_owned();
+        }
+        if let Some(rest) = folder.strip_prefix(&format!("{from}/")) {
+            return format!("{to}/{rest}");
+        }
+    }
+    folder.to_owned()
+}
+
 /// Writes the plan. Reads the PST, read-only, and checks it did not change.
 pub fn plan_pst_command(
     ews: &EwsArgs,
@@ -44,6 +68,7 @@ pub fn plan_pst_command(
     pst: &Path,
     cutoff: &str,
     replacements: &Replacements<'_>,
+    selection: &Selection<'_>,
     out: &Path,
 ) -> Result<(), String> {
     let Replacements {
@@ -62,7 +87,25 @@ pub fn plan_pst_command(
 
     let client = connect(ews)?;
     let (folders, existing) = folder_map(&client)?;
+    if let Some(keys) = selection.keys {
+        let text = fs::read_to_string(keys).map_err(|e| format!("{}: {e}", keys.display()))?;
+        let keys: HashSet<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .collect();
+        source.retain(|item| keys.contains(item.key.as_str()));
+    }
+    let renames: Vec<(&str, &str)> = selection
+        .renames
+        .iter()
+        .map(|r| {
+            r.split_once('=')
+                .ok_or_else(|| format!("--rename {r:?}: expected FROM=TO"))
+        })
+        .collect::<Result<_, _>>()?;
     for item in &mut source {
+        item.folder = renamed(&item.folder, &renames);
         item.folder = folders.target(&item.folder);
     }
     source.retain(|item| item.received.is_none_or(|received| received < cutoff));
@@ -200,13 +243,20 @@ pub fn plan_pst_command(
         return Err(format!("{} changed while it was read", pst.display()));
     }
 
-    // Drop what could not be rebuilt, and the moves waiting for it.
+    // Drop what could not be rebuilt, and the moves waiting for it, and the
+    // quarantine run folder when nothing is left to go into it.
+    let quarantine_used = actions.iter().any(|action| {
+        matches!(action, Action::Move { to, requires, .. }
+            if *to == quarantine && !requires.is_some_and(|r| dropped.contains(&r)))
+    });
     let mut index_map = HashMap::new();
     let mut kept = Vec::new();
     for (step, action) in actions.into_iter().enumerate() {
         let waits_on_dropped =
             matches!(&action, Action::Move { requires: Some(r), .. } if dropped.contains(r));
-        if dropped.contains(&step) || waits_on_dropped {
+        let unused_folder = !quarantine_used
+            && matches!(&action, Action::CreateFolder { path } if *path == quarantine);
+        if dropped.contains(&step) || waits_on_dropped || unused_folder {
             continue;
         }
         index_map.insert(step, kept.len());
@@ -247,4 +297,20 @@ pub fn plan_pst_command(
         out.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::renamed;
+
+    #[test]
+    fn renames_a_folder_and_what_is_under_it() {
+        let renames = [("Archive/Shop", "Archive/Shop and more")];
+        assert_eq!(renamed("Archive/Shop", &renames), "Archive/Shop and more");
+        assert_eq!(
+            renamed("Archive/Shop/2019", &renames),
+            "Archive/Shop and more/2019"
+        );
+        assert_eq!(renamed("Archive/Shopping", &renames), "Archive/Shopping");
+    }
 }

@@ -4,6 +4,15 @@ What changes from one release to the next, for the person running `ecm`. The for
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/). A release commit dates its section.
 
+## [Unreleased]
+
+### Added
+
+- `plan-pst --keys FILE`: consider only the PST messages listed, to split a large
+  restore into plans of a reasonable size.
+- `plan-pst --rename FROM=TO`: put the messages of a source folder, and of the
+  folders under it, into a target folder renamed since.
+
 ## [0.1.0] - 2026-10-19
 
 The first release. It repaired a real mailbox of about 21,000 messages that a
