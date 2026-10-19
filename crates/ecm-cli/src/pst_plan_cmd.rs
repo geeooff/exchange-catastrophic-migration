@@ -60,6 +60,11 @@ fn damaged_keys(path: &Path) -> Result<HashSet<String>, String> {
         .collect())
 }
 
+/// Above this size, a rebuilt message is created without its files, which then
+/// go one request each: an Exchange server refused a 97 MB `CreateItem` (HTTP
+/// 413) and took one of 30 MB.
+const MAX_MIME: usize = 25 * 1024 * 1024;
+
 /// Which PST messages a plan considers, and where they go.
 pub struct Selection<'a> {
     /// A file listing PST item keys, one per line: only those are considered,
@@ -266,6 +271,8 @@ pub fn plan_pst_command(
     let before = ecm_pst::sha256_file(pst).map_err(|e| e.to_string())?;
     let mut failed: Vec<String> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
+    let mut split: Vec<String> = Vec::new();
+    let mut files: HashMap<usize, Vec<ecm_pst::content::AttachedFile>> = HashMap::new();
     let mut dropped = HashSet::new();
     {
         let reader = ecm_pst::PstSource::open(pst).map_err(|e| e.to_string())?;
@@ -295,7 +302,22 @@ pub fn plan_pst_command(
                             content.skipped_attachments
                         ));
                     }
-                    let mime = ecm_pst::content::to_mime_with(&content, sender);
+                    let mut mime = ecm_pst::content::to_mime_with(&content, sender);
+                    // Too large for one request: created without its files, which
+                    // follow one by one. Not a signed message, whose body is a file.
+                    let mut bare = content.clone();
+                    bare.attachments.clear();
+                    if mime.len() > MAX_MIME
+                        && !content.attachments.is_empty()
+                        && ecm_pst::content::has_body(&bare) == ecm_pst::content::has_body(&content)
+                    {
+                        mime = ecm_pst::content::to_mime_with(&bare, sender);
+                        split.push(format!(
+                            "{to}: {subject:?}: {} files",
+                            content.attachments.len()
+                        ));
+                        files.insert(step, content.attachments);
+                    }
                     *action = Action::RecreateMime {
                         to: to.clone(),
                         subject: subject.clone(),
@@ -317,9 +339,56 @@ pub fn plan_pst_command(
         return Err(format!("{} changed while it was read", pst.display()));
     }
 
-    // Drop what could not be rebuilt, the moves waiting for it, and the folders
-    // nothing is left to go into (the quarantine run folder when nothing is
-    // replaced, a source folder whose messages are all left out).
+    let kept = finish(actions, &dropped, files);
+
+    let mut text = String::new();
+    for action in &kept {
+        text.push_str(&serde_json::to_string(action).map_err(|e| e.to_string())?);
+        text.push('\n');
+    }
+    fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("Plan {run}: {} steps into {}", kept.len(), out.display());
+    for (kind, n) in counts(&kept) {
+        println!("  {kind:<14} {n:>7}");
+    }
+    report_list(
+        "Rebuilt without some attachments: embedded messages, no data, or unreadable",
+        &partial,
+    );
+    report_list(
+        "Too large for one request: created first, then given their files one by one",
+        &split,
+    );
+    report_list("Not rebuilt from the PST", &failed);
+    println!();
+    println!(
+        "Nothing was changed; the PST is unchanged. Review the plan, then run `ecm apply --plan {} --dry-run`.",
+        out.display()
+    );
+    Ok(())
+}
+
+fn report_list(title: &str, lines: &[String]) {
+    if !lines.is_empty() {
+        println!();
+        println!("{title} ({}):", lines.len());
+        for line in lines {
+            println!("  {line}");
+        }
+    }
+}
+
+/// The plan's last pass. Drops the steps that could not be rebuilt, the moves
+/// waiting for them, and the folders nothing is left to go into (the quarantine
+/// run folder when nothing is replaced, a source folder whose messages are all
+/// left out). After each message too large for one request come its files, each
+/// waiting for the message or the file before it; the moves that waited for the
+/// message wait for its last file.
+fn finish(
+    actions: Vec<Action>,
+    dropped: &HashSet<usize>,
+    mut files: HashMap<usize, Vec<ecm_pst::content::AttachedFile>>,
+) -> Vec<Action> {
     let waits_on_dropped = |action: &Action| matches!(action, Action::Move { requires: Some(r), .. } if dropped.contains(r));
     let mut used: HashSet<String> = HashSet::new();
     for (step, action) in actions.iter().enumerate() {
@@ -348,6 +417,18 @@ pub fn plan_pst_command(
         }
         index_map.insert(step, kept.len());
         kept.push(action);
+        for file in files.remove(&step).unwrap_or_default() {
+            kept.push(Action::Attach {
+                requires: kept.len() - 1,
+                name: file.name,
+                content_type: file
+                    .mime_type
+                    .unwrap_or_else(|| "application/octet-stream".into()),
+                content_id: file.content_id,
+                data: base64::engine::general_purpose::STANDARD.encode(file.data),
+            });
+            index_map.insert(step, kept.len() - 1);
+        }
     }
     for action in &mut kept {
         if let Action::Move {
@@ -358,44 +439,77 @@ pub fn plan_pst_command(
         }
     }
 
-    let mut text = String::new();
-    for action in &kept {
-        text.push_str(&serde_json::to_string(action).map_err(|e| e.to_string())?);
-        text.push('\n');
-    }
-    fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
-    println!("Plan {run}: {} steps into {}", kept.len(), out.display());
-    for (kind, n) in counts(&kept) {
-        println!("  {kind:<14} {n:>7}");
-    }
-    if !partial.is_empty() {
-        println!();
-        println!(
-            "Rebuilt without some attachments: embedded messages, no data, or unreadable ({}):",
-            partial.len()
-        );
-        for line in &partial {
-            println!("  {line}");
-        }
-    }
-    if !failed.is_empty() {
-        println!();
-        println!("Not rebuilt from the PST ({}):", failed.len());
-        for line in &failed {
-            println!("  {line}");
-        }
-    }
-    println!();
-    println!(
-        "Nothing was changed; the PST is unchanged. Review the plan, then run `ecm apply --plan {} --dry-run`.",
-        out.display()
-    );
-    Ok(())
+    kept
 }
 
 #[cfg(test)]
 mod tests {
-    use super::renamed;
+    use std::collections::{HashMap, HashSet};
+
+    use ecm_audit::plan::Action;
+    use ecm_pst::content::AttachedFile;
+
+    use super::{finish, renamed};
+
+    fn mime(to: &str) -> Action {
+        Action::RecreateMime {
+            to: to.into(),
+            subject: None,
+            read: None,
+            sent: None,
+            received: None,
+            mime: String::new(),
+        }
+    }
+
+    fn quarantine(item: &str, requires: usize) -> Action {
+        Action::Move {
+            item: item.into(),
+            to: "Q/run".into(),
+            reason: "replaced".into(),
+            requires: Some(requires),
+        }
+    }
+
+    #[test]
+    fn drops_what_failed_and_sends_large_messages_files_one_by_one() {
+        let folder = |path: &str| Action::CreateFolder { path: path.into() };
+        let actions = vec![
+            folder("Q"),
+            folder("Q/run"),
+            folder("Unused"),
+            mime("Inbox"),
+            mime("Unused"),
+            quarantine("old", 3),
+            quarantine("gone", 4),
+        ];
+        let file = |name: &str| AttachedFile {
+            name: name.into(),
+            mime_type: Some("video/mp4".into()),
+            content_id: None,
+            data: b"x".to_vec(),
+        };
+        let files = HashMap::from([(3, vec![file("a.mp4"), file("b.mp4")])]);
+        let kept = finish(actions, &HashSet::from([4]), files);
+        let attach = |requires: usize, name: &str| Action::Attach {
+            requires,
+            name: name.into(),
+            content_type: "video/mp4".into(),
+            content_id: None,
+            data: "eA==".into(),
+        };
+        assert_eq!(
+            kept,
+            [
+                folder("Q"),
+                folder("Q/run"),
+                mime("Inbox"),
+                attach(2, "a.mp4"),
+                attach(3, "b.mp4"),
+                quarantine("old", 4),
+            ]
+        );
+    }
 
     #[test]
     fn renames_a_folder_and_what_is_under_it() {

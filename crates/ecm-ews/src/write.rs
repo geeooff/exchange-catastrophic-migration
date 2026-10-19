@@ -174,6 +174,38 @@ impl<T: Transport> EwsClient<T> {
             .map(|_| ())
     }
 
+    /// Attaches a file to an item, for a message too large to create in one
+    /// request with its files. A file with a `Content-ID` is inline: its HTML
+    /// body shows it.
+    pub fn attach_file(
+        &self,
+        item_id: &str,
+        name: &str,
+        content_type: &str,
+        content_id: Option<&str>,
+        data: &[u8],
+    ) -> Result<()> {
+        let inline = content_id.map_or(String::new(), |id| {
+            format!(
+                "<t:ContentId>{}</t:ContentId><t:IsInline>true</t:IsInline>",
+                escape(id)
+            )
+        });
+        let body = format!(
+            r#"<m:CreateAttachment><m:ParentItemId Id="{}"/><m:Attachments><t:FileAttachment><t:Name>{}</t:Name><t:ContentType>{}</t:ContentType>{inline}<t:Content>{}</t:Content></t:FileAttachment></m:Attachments></m:CreateAttachment>"#,
+            escape(item_id),
+            escape(name),
+            escape(content_type),
+            base64::engine::general_purpose::STANDARD.encode(data)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("CreateAttachment returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
     /// Moves items to a folder. Nothing is deleted. Returns, per item, its new id
     /// (a moved item gets a new id) or the error.
     pub fn move_items(&self, ids: &[&str], folder_id: &str) -> Result<Vec<Result<String>>> {
@@ -463,6 +495,22 @@ mod tests {
             .attach_contact_photo("C1", &[0xFF, 0xD8, 0xFF])
             .unwrap();
         assert!(fake.requests.borrow()[0].contains(r#"<m:ParentItemId Id="C1"/><m:Attachments><t:FileAttachment><t:Name>ContactPicture.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:IsContactPhoto>true</t:IsContactPhoto><t:Content>/9j/</t:Content>"#));
+    }
+
+    #[test]
+    fn attaches_files_to_a_message() {
+        let answer = r#"<m:CreateAttachmentResponse><m:ResponseMessages><m:CreateAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="A1"/></t:FileAttachment></m:Attachments></m:CreateAttachmentResponseMessage></m:ResponseMessages></m:CreateAttachmentResponse>"#;
+        let fake = FakeTransport::new([(200, soap(answer)), (200, soap(answer))]);
+        let client = EwsClient::new(&fake);
+        client
+            .attach_file("M1", "a&b.mp4", "video/mp4", None, b"abc")
+            .unwrap();
+        client
+            .attach_file("M1", "logo.png", "image/png", Some("logo@x"), b"abc")
+            .unwrap();
+        let requests = fake.requests.borrow();
+        assert!(requests[0].contains(r#"<m:ParentItemId Id="M1"/><m:Attachments><t:FileAttachment><t:Name>a&amp;b.mp4</t:Name><t:ContentType>video/mp4</t:ContentType><t:Content>YWJj</t:Content>"#));
+        assert!(requests[1].contains(r#"<t:ContentType>image/png</t:ContentType><t:ContentId>logo@x</t:ContentId><t:IsInline>true</t:IsInline><t:Content>"#));
     }
 
     #[test]

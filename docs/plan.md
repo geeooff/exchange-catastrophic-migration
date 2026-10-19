@@ -158,8 +158,10 @@ re-creates every migration copy the first one kept.
 
 Actions (JSON Lines, one per step, `requires` naming the step that must succeed
 first): `create-folder`; `recreate` (MIME fetched from Outlook.com at apply time);
-`recreate-mime` (MIME carried by the plan, rebuilt from a PST); `create` (a typed
-calendar item, contact or task, as EWS XML); `contact-photo`; `create-rule`; `move`
+`recreate-mime` (MIME carried by the plan, rebuilt from a PST); `attach` (a file of
+a `recreate-mime` message over 25 MB, which is created without its files: each
+`attach` waits for the message or the file before it); `create` (a typed calendar
+item, contact or task, as EWS XML); `contact-photo`; `create-rule`; `move`
 (misplaced, duplicate, damaged, replaced, unmatched); `discard-folder`.
 
 ### Re-upload with full fidelity
@@ -242,7 +244,9 @@ property.
 - Outlook.com MIME of some sent items lacks the Message-ID, or names the sender by its
   internal Exchange address (`IMCEAEX-…`). The PST copy, with a given sender, fixes
   them.
-- EWS limits on hosted Exchange: throttling, maximum request size (large attachments).
+- EWS limits on hosted Exchange: throttling, maximum request size. OVH refused a
+  97 MB `CreateItem` (HTTP 413) and took 30 MB ones: larger messages go as the
+  message, then one `CreateAttachment` per file.
 - Some properties can only be set at creation, so some fixes require a re-upload.
 - Recurring appointments with exceptions are the hardest item type to re-create
   faithfully.

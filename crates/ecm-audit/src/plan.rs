@@ -125,6 +125,22 @@ pub enum Action {
         /// The rule, as EWS XML.
         rule: String,
     },
+    /// Attach a file to the item an earlier step created: a message too large
+    /// for one request is created without its files, then given them one by one.
+    Attach {
+        /// The step that created the item, or attached its previous file; its
+        /// journal holds the item id.
+        requires: usize,
+        /// File name.
+        name: String,
+        /// MIME type.
+        content_type: String,
+        /// `Content-ID`, for a file the HTML body shows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_id: Option<String>,
+        /// The file, base64.
+        data: String,
+    },
     /// Set the photo of a target contact.
     ContactPhoto {
         /// Target contact id.
@@ -154,6 +170,7 @@ impl Action {
                 _ => "create",
             },
             Action::ContactPhoto { .. } => "contact-photo",
+            Action::Attach { .. } => "attach",
             Action::CreateRule { .. } => "create-rule",
             Action::DiscardFolder { .. } => "discard-folder",
         }
@@ -573,5 +590,19 @@ mod tests {
             r#"{"action":"move","item":"x","to":"y","reason":"duplicate"}"#
         );
         assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), action);
+
+        let attach = Action::Attach {
+            requires: 3,
+            name: "a.mp4".into(),
+            content_type: "video/mp4".into(),
+            content_id: None,
+            data: "eA==".into(),
+        };
+        let json = serde_json::to_string(&attach).unwrap();
+        assert_eq!(
+            json,
+            r#"{"action":"attach","requires":3,"name":"a.mp4","content_type":"video/mp4","data":"eA=="}"#
+        );
+        assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), attach);
     }
 }

@@ -22,6 +22,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - PST bodies kept only as compressed RTF are recovered: the HTML or plain text the
   RTF encapsulates ([MS-OXRTFEX]), else the text of the RTF, decoded in its code
   pages. `source show` says when a body came from RTF.
+- A PST message over 25 MB is created without its files, then given them one
+  request each (plan step `attach`): an Exchange server refuses too large a
+  request (HTTP 413).
 
 ### Fixed
 
