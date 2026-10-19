@@ -243,13 +243,20 @@ pub fn plan_pst_command(
         return Err(format!("{} changed while it was read", pst.display()));
     }
 
-    // Drop what could not be rebuilt, and the moves waiting for it.
+    // Drop what could not be rebuilt, and the moves waiting for it, and the
+    // quarantine run folder when nothing is left to go into it.
+    let quarantine_used = actions.iter().any(|action| {
+        matches!(action, Action::Move { to, requires, .. }
+            if *to == quarantine && !requires.is_some_and(|r| dropped.contains(&r)))
+    });
     let mut index_map = HashMap::new();
     let mut kept = Vec::new();
     for (step, action) in actions.into_iter().enumerate() {
         let waits_on_dropped =
             matches!(&action, Action::Move { requires: Some(r), .. } if dropped.contains(r));
-        if dropped.contains(&step) || waits_on_dropped {
+        let unused_folder = !quarantine_used
+            && matches!(&action, Action::CreateFolder { path } if *path == quarantine);
+        if dropped.contains(&step) || waits_on_dropped || unused_folder {
             continue;
         }
         index_map.insert(step, kept.len());
