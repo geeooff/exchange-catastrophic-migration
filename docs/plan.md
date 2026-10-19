@@ -238,8 +238,9 @@ property.
   message without data) are left out and listed. PST subjects can start with the MAPI prefix-length marker (SOH
   and a length), which must be stripped before matching.
 - Migration copies that look healthy can still be damaged: emptied bodies (found with
-  the EWS `item:Preview` and Graph `bodyPreview`), every LF byte of attachments turned
-  into CRLF, sent dates with day and month swapped, Message-IDs rewritten by the
+  the EWS `item:Preview` and Graph `bodyPreview`), the LF bytes of attachments turned
+  into CRLF (all of them, or those not after a CR, with a line end added at the
+  end), sent dates with day and month swapped, Message-IDs rewritten by the
   migration's servers. They are never trusted: each is replaced from a source.
 - Outlook.com MIME of some sent items lacks the Message-ID, or names the sender by its
   internal Exchange address (`IMCEAEX-…`). The PST copy, with a given sender, fixes

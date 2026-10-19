@@ -13,8 +13,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - `plan-pst --rename FROM=TO`: put the messages of a source folder, and of the
   folders under it, into a target folder renamed since.
 - `check-content`: compare the target copies of PST messages with the PST, body
-  and file attachment by attachment (missing, every LF turned into CRLF, otherwise
-  different), and write the damaged ones as CSV.
+  and file attachment by attachment (missing, line ends changed, otherwise
+  different), and write the damaged ones as CSV. Line ends count as changed when
+  every LF became CRLF, or only the LFs not after a CR, with maybe a line end
+  added at the end, as found on a real photo.
 - `plan-pst --damaged FILE`: rebuild those copies from the PST in the folder they
   are in, and quarantine them, when an earlier plan created or moved them.
 - `source show`: a PST message's properties and attachments, like `target show`.

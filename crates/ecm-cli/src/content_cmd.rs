@@ -173,9 +173,30 @@ fn lf_to_crlf(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `data` with every CRLF turned into LF, and without one line end at the end.
+fn lf_only(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    for (i, &b) in data.iter().enumerate() {
+        if !(b == b'\r' && data.get(i + 1) == Some(&b'\n')) {
+            out.push(b);
+        }
+    }
+    if out.last() == Some(&b'\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Whether `copy` is `source` with its line ends changed, as some migrations do
+/// to attachments: every LF turned into CRLF, or only those not after a CR, with
+/// maybe a line end added at the end.
+fn line_ends_changed(source: &[u8], copy: &[u8]) -> bool {
+    copy.len() > source.len() && (copy == lf_to_crlf(source) || lf_only(copy) == lf_only(source))
+}
+
 /// What differs between the source's files and a copy's, matched by name
-/// (case-insensitive): files missing from the copy, files whose every LF became
-/// CRLF, other differences, and files only the copy has.
+/// (case-insensitive): files missing from the copy, files whose line ends
+/// changed, other differences, and files only the copy has.
 fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<String> {
     let mut issues = Vec::new();
     let mut used = vec![false; copy.len()];
@@ -191,7 +212,7 @@ fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<St
                 if copied == data {
                     continue;
                 }
-                if *copied == lf_to_crlf(data).as_slice() {
+                if line_ends_changed(data, copied) {
                     issues.push(format!("LF to CRLF {name}"));
                 } else {
                     issues.push(format!(
@@ -357,5 +378,18 @@ mod tests {
                 "extra new.png"
             ]
         );
+    }
+
+    #[test]
+    fn sees_line_ends_changed_only_where_an_lf_stood_alone() {
+        // As found on a real photo: the LFs not after a CR became CRLF, and a line
+        // end was added at the end.
+        assert!(line_ends_changed(
+            b"\xff\xd8\r\n\x01\n\x02",
+            b"\xff\xd8\r\n\x01\r\n\x02\r\n"
+        ));
+        assert!(line_ends_changed(b"a\r\nb", b"a\r\r\nb"));
+        assert!(!line_ends_changed(b"a\nb", b"a\nb"));
+        assert!(!line_ends_changed(b"a\nb", b"a\r\nc"));
     }
 }

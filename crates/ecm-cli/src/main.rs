@@ -211,8 +211,8 @@ enum Command {
         damaged: Option<PathBuf>,
     },
     /// Compare the target copies of PST messages, found by Message-ID, with the
-    /// PST: emptied bodies, and each file attachment (missing, every LF turned
-    /// into CRLF, or otherwise different). Writes the damaged copies as CSV for
+    /// PST: emptied bodies, and each file attachment (missing, line ends changed
+    /// from LF to CRLF, or otherwise different). Writes the damaged copies as CSV for
     /// `plan-pst --damaged`. Uses `source.jsonl` and `target.after.jsonl`; only
     /// reads both.
     CheckContent {
