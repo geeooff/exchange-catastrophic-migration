@@ -18,7 +18,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   every LF became CRLF, or only the LFs not after a CR, with maybe a line end
   added at the end, as found on a real photo. A body counts as lost only when the
   copy's own body is empty: Exchange's preview is empty too for an HTML body
-  with only photos, or one not previewed yet.
+  with only photos, or one not previewed yet, and only when the PST body shows
+  something (text, or an image). A file renamed on the way is found by its
+  content, and a copy deleted or moved since the inventory is counted, not an
+  error.
 - `plan-pst --damaged FILE`: rebuild those copies from the PST in the folder they
   are in, and quarantine them, when an earlier plan created or moved them.
 - `source show`: a PST message's properties and attachments, like `target show`.

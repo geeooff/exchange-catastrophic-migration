@@ -200,15 +200,30 @@ fn line_ends_changed(source: &[u8], copy: &[u8]) -> bool {
 fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<String> {
     let mut issues = Vec::new();
     let mut used = vec![false; copy.len()];
-    for (name, data) in source {
-        let found = copy
-            .iter()
-            .enumerate()
-            .find(|(i, (n, _))| !used[*i] && n.eq_ignore_ascii_case(name));
-        match found {
-            None => issues.push(format!("missing {name}")),
-            Some((i, (_, copied))) => {
+    // By name first, then a file renamed on the way (a space for an
+    // underscore) by its content.
+    let mut pairs: Vec<Option<usize>> = Vec::new();
+    for (name, _) in source {
+        let found = (0..copy.len()).find(|&i| !used[i] && copy[i].0.eq_ignore_ascii_case(name));
+        if let Some(i) = found {
+            used[i] = true;
+        }
+        pairs.push(found);
+    }
+    for (pair, (_, data)) in pairs.iter_mut().zip(source) {
+        if pair.is_none() {
+            *pair = (0..copy.len())
+                .find(|&i| !used[i] && (copy[i].1 == *data || line_ends_changed(data, copy[i].1)));
+            if let Some(i) = *pair {
                 used[i] = true;
+            }
+        }
+    }
+    for (pair, (name, data)) in pairs.into_iter().zip(source) {
+        match pair {
+            None => issues.push(format!("missing {name}")),
+            Some(i) => {
+                let copied = &copy[i].1;
                 if copied == data {
                     continue;
                 }
@@ -232,18 +247,76 @@ fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<St
     issues
 }
 
+/// Whether a PST message's body shows something: text, or an image in its HTML.
+/// An HTML body with neither, as meeting replies have, loses nothing when empty.
+fn shows_something(content: &ecm_pst::content::MessageContent) -> bool {
+    if content
+        .text
+        .as_deref()
+        .is_some_and(|t| !t.trim().is_empty())
+    {
+        return true;
+    }
+    let Some(html) = &content.html else {
+        return false;
+    };
+    let lower = html.to_ascii_lowercase();
+    if lower.windows(4).any(|w| w == b"<img") {
+        return true;
+    }
+    // Text outside tags, styles, scripts and comments, other than spaces.
+    let mut text = Vec::new();
+    let mut in_tag = false;
+    let mut skip_until: Option<&[u8]> = None;
+    let mut i = 0;
+    while i < lower.len() {
+        if let Some(end) = skip_until {
+            if lower[i..].starts_with(end) {
+                skip_until = None;
+                i += end.len();
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if lower[i..].starts_with(b"<style") {
+            skip_until = Some(b"</style>");
+        } else if lower[i..].starts_with(b"<script") {
+            skip_until = Some(b"</script>");
+        } else if lower[i..].starts_with(b"<!--") {
+            skip_until = Some(b"-->");
+        } else if lower[i] == b'<' {
+            in_tag = true;
+        } else if lower[i] == b'>' {
+            in_tag = false;
+        } else if !in_tag {
+            text.push(lower[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&text)
+        .replace("&nbsp;", " ")
+        .chars()
+        .any(|c| !c.is_whitespace() && c != '\u{a0}')
+}
+
+/// Whether an EWS error says the item is no longer there.
+fn gone(error: &ecm_ews::Error) -> bool {
+    matches!(error, ecm_ews::Error::Response { code, .. } if code == "ErrorItemNotFound")
+}
+
 /// The length of an item's body, as Exchange gives it.
 fn body_length<T: ecm_ews::Transport>(
     client: &ecm_ews::EwsClient<T>,
     id: &str,
-) -> Result<usize, String> {
+) -> ecm_ews::Result<usize> {
     let properties = client
-        .item_properties(&[id])
-        .map_err(|e| e.to_string())?
+        .item_properties(&[id])?
         .into_iter()
         .next()
-        .ok_or_else(|| format!("{id}: GetItem returned no item"))?
-        .map_err(|e| e.to_string())?;
+        .ok_or_else(|| {
+            ecm_ews::Error::MalformedResponse(format!("{id}: GetItem returned no item"))
+        })??;
     Ok(properties
         .get("body_length")
         .and_then(|n| n.parse().ok())
@@ -306,15 +379,32 @@ pub fn check_content_command(
             // The inventory says a body is empty from Exchange's preview, which is
             // empty too for an HTML body without text (only photos) or not yet
             // previewed: the copy's own body decides.
-            let body_lost = ecm_pst::content::has_body(&content)
-                && copy.body_empty == Some(true)
-                && body_length(&client, &copy.key)? == 0;
+            // A copy deleted or moved since the inventory is not compared.
+            let body_lost = if shows_something(&content) && copy.body_empty == Some(true) {
+                match body_length(&client, &copy.key) {
+                    Ok(length) => length == 0,
+                    Err(error) if gone(&error) => {
+                        *counts.entry("gone since the inventory").or_default() += 1;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            } else {
+                false
+            };
             // A signed message keeps its signed entity as a file: its copy has the
             // entity's own files instead.
             let signed = item.class.to_lowercase().starts_with("ipm.note.smime");
             let mut issues = Vec::new();
             if !signed && (!content.attachments.is_empty() || copy.has_attachments == Some(true)) {
-                let files = client.attachments(&copy.key).map_err(|e| e.to_string())?;
+                let files = match client.attachments(&copy.key) {
+                    Ok(files) => files,
+                    Err(error) if gone(&error) => {
+                        *counts.entry("gone since the inventory").or_default() += 1;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
                 let ours: Vec<(&str, &[u8])> = content
                     .attachments
                     .iter()
@@ -400,6 +490,35 @@ mod tests {
                 "missing gone.doc",
                 "extra new.png"
             ]
+        );
+    }
+
+    #[test]
+    fn a_body_with_neither_text_nor_image_shows_nothing() {
+        let html = |h: &str| ecm_pst::content::MessageContent {
+            html: Some(h.as_bytes().to_vec()),
+            ..Default::default()
+        };
+        assert!(!shows_something(&html(
+            "<html><head><style>p { color: red }</style></head><body><p>&nbsp;</p><!-- x --></body></html>"
+        )));
+        assert!(shows_something(&html("<p>Bonjour</p>")));
+        assert!(shows_something(&html(r#"<IMG src="cid:photo">"#)));
+        assert!(shows_something(&ecm_pst::content::MessageContent {
+            text: Some("Salut".into()),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn finds_a_file_renamed_on_the_way_by_its_content() {
+        let source: &[(&str, &[u8])] = &[("Logo_01.png", b"png"), ("a.txt", b"a")];
+        let copy: &[(&str, &[u8])] = &[("a.txt", b"a"), ("Logo 01.png", b"png")];
+        assert!(attachment_issues(source, copy).is_empty());
+        let other: &[(&str, &[u8])] = &[("a.txt", b"a"), ("Logo 01.png", b"gif")];
+        assert_eq!(
+            attachment_issues(source, other),
+            ["missing Logo_01.png", "extra Logo 01.png"]
         );
     }
 
