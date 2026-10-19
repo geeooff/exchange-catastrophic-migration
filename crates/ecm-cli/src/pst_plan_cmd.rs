@@ -22,7 +22,9 @@ use ecm_model::{
 use ecm_store::{SOURCE_INVENTORY, read_inventory};
 
 use crate::{
-    EwsArgs, connect,
+    EwsArgs,
+    audit_cmd::{GraphArgs, OUTLOOK_INVENTORY},
+    connect,
     plan_cmd::{created_items, folder_map, moved_items},
     verify_cmd::VERIFIED_INVENTORY,
 };
@@ -90,8 +92,69 @@ fn renamed(folder: &str, renames: &[(&str, &str)]) -> String {
 }
 
 /// Writes the plan. Reads the PST, read-only, and checks it did not change.
+/// The mailbox a PST plan is for.
+pub enum PstTarget<'a> {
+    /// An Exchange mailbox (EWS), listed in `target.after.jsonl`: messages are
+    /// created from MIME.
+    Ews(&'a EwsArgs),
+    /// An Outlook.com mailbox (Microsoft Graph), listed in `outlook.jsonl`:
+    /// messages are created from JSON with the properties only creation sets,
+    /// their files as `attach` steps (`ecm apply-graph`).
+    Graph(&'a GraphArgs),
+}
+
+/// The folder map and folder paths of the target.
+/// Where the folders of an Outlook.com target are kept after a first sign-in,
+/// so that plans in batches need no other: names only, no token.
+pub const OUTLOOK_FOLDERS: &str = "outlook-folders.json";
+
+fn target_folders(
+    target: &PstTarget<'_>,
+    work: &Path,
+) -> Result<
+    (
+        ecm_audit::plan::FolderMap,
+        std::collections::BTreeSet<String>,
+    ),
+    String,
+> {
+    match target {
+        PstTarget::Ews(ews) => folder_map(&connect(ews)?),
+        #[cfg(windows)]
+        PstTarget::Graph(graph) => {
+            let saved = work.join(OUTLOOK_FOLDERS);
+            if let Ok(text) = fs::read_to_string(&saved) {
+                let value: serde_json::Value =
+                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", saved.display()))?;
+                let map = ecm_audit::plan::FolderMap {
+                    well_known: serde_json::from_value(value["well_known"].clone())
+                        .map_err(|e| format!("{}: {e}", saved.display()))?,
+                };
+                let existing = serde_json::from_value(value["existing"].clone())
+                    .map_err(|e| format!("{}: {e}", saved.display()))?;
+                println!(
+                    "Outlook.com folders from {} (delete it to read them again).",
+                    saved.display()
+                );
+                return Ok((map, existing));
+            }
+            let client = crate::pim_cmd::sign_in(graph)?;
+            let folders = crate::graph_plan_cmd::graph_folder_map(&client)?;
+            let value = serde_json::json!({
+                "well_known": folders.map.well_known,
+                "existing": folders.existing,
+            });
+            fs::write(&saved, value.to_string())
+                .map_err(|e| format!("{}: {e}", saved.display()))?;
+            Ok((folders.map, folders.existing))
+        }
+        #[cfg(not(windows))]
+        PstTarget::Graph(_) => Err("Microsoft Graph access needs Windows for now (WinHTTP)".into()),
+    }
+}
+
 pub fn plan_pst_command(
-    ews: &EwsArgs,
+    target_mailbox: &PstTarget<'_>,
     work: &Path,
     pst: &Path,
     cutoff: &str,
@@ -109,14 +172,19 @@ pub fn plan_pst_command(
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
         .ok_or_else(|| format!("invalid --cutoff {cutoff:?}: expected YYYY-MM-DD"))?;
     let mut source = read_inventory(&work.join(SOURCE_INVENTORY)).map_err(|e| e.to_string())?;
-    let target: Vec<_> = read_inventory(&work.join(VERIFIED_INVENTORY))
-        .map_err(|e| e.to_string())?
+    let graph = matches!(target_mailbox, PstTarget::Graph(_));
+    let inventory = work.join(if graph {
+        OUTLOOK_INVENTORY
+    } else {
+        VERIFIED_INVENTORY
+    });
+    let target: Vec<_> = read_inventory(&inventory)
+        .map_err(|e| format!("{}: {e}", inventory.display()))?
         .into_iter()
         .filter(|item| !is_parked(&item.folder))
         .collect();
 
-    let client = connect(ews)?;
-    let (folders, existing) = folder_map(&client)?;
+    let (folders, existing) = target_folders(target_mailbox, work)?;
     if let Some(keys) = selection.keys {
         let text = fs::read_to_string(keys).map_err(|e| format!("{}: {e}", keys.display()))?;
         let keys: HashSet<&str> = text
@@ -295,12 +363,40 @@ pub fn plan_pst_command(
                     ));
                     dropped.insert(step);
                 }
-                Ok(content) => {
+                Ok(mut content) => {
                     if content.skipped_attachments > 0 {
                         partial.push(format!(
                             "{to}: {subject:?}: {} left out",
                             content.skipped_attachments
                         ));
+                    }
+                    if graph {
+                        // From JSON, with the plan's read state and times; every
+                        // file as its own step, inline only when the HTML shows it.
+                        content.read = *read;
+                        content.sent = *sent;
+                        content.received = *received;
+                        let message = crate::graph_cmd::graph_message(&content, sender);
+                        let shown: Vec<Option<String>> = content
+                            .attachments
+                            .iter()
+                            .map(|f| {
+                                ecm_pst::content::shown_content_id(&content, f).map(str::to_owned)
+                            })
+                            .collect();
+                        let mut attachments = std::mem::take(&mut content.attachments);
+                        for (file, id) in attachments.iter_mut().zip(shown) {
+                            file.content_id = id;
+                        }
+                        if !attachments.is_empty() {
+                            files.insert(step, attachments);
+                        }
+                        *action = Action::CreateMessage {
+                            to: to.clone(),
+                            subject: subject.clone(),
+                            message: serde_json::to_string(&message).map_err(|e| e.to_string())?,
+                        };
+                        continue;
                     }
                     let mut mime = ecm_pst::content::to_mime_with(&content, sender);
                     // Too large for one request: created without its files, which
@@ -374,7 +470,8 @@ pub fn plan_pst_command(
     report_list("Not rebuilt from the PST", &failed);
     println!();
     println!(
-        "Nothing was changed; the PST is unchanged. Review the plan, then run `ecm apply --plan {} --dry-run`.",
+        "Nothing was changed; the PST is unchanged. Review the plan, then run `ecm {} --plan {} --dry-run`.",
+        if graph { "apply-graph" } else { "apply" },
         out.display()
     );
     Ok(())
@@ -407,6 +504,7 @@ fn finish(
         let to = match action {
             Action::Recreate { to, .. }
             | Action::RecreateMime { to, .. }
+            | Action::CreateMessage { to, .. }
             | Action::Move { to, .. } => to,
             _ => continue,
         };

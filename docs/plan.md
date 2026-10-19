@@ -113,6 +113,7 @@ ecm plan-pst       --ews <url> --pst <file> ... # re-create from a PST, rebuilt 
 ecm plan-pim | plan-contact-photos | plan-notes | plan-rules   # other item types
 ecm plan-park | plan-discard                    # set aside, then into Deleted Items
 ecm apply          --plan <file> [--dry-run] [--limit N]   # run it, journaled, resumable
+ecm apply-graph    --client-id <id> --plan <file> ...   # the same in an Outlook.com mailbox
 ecm verify         --ews <url> --work <dir> ... # re-inventory and check again
 ecm check-content  --ews <url> | --outlook-com --client-id <id> --pst <file> ...   # copies vs the PST
 ecm report-cleanup --work <dir> --domain ...    # sort the old mailbox once a domain moved
@@ -159,9 +160,11 @@ re-creates every migration copy the first one kept.
 
 Actions (JSON Lines, one per step, `requires` naming the step that must succeed
 first): `create-folder`; `recreate` (MIME fetched from Outlook.com at apply time);
-`recreate-mime` (MIME carried by the plan, rebuilt from a PST); `attach` (a file of
-a `recreate-mime` message over 25 MB, which is created without its files: each
-`attach` waits for the message or the file before it); `create` (a typed calendar
+`recreate-mime` (MIME carried by the plan, rebuilt from a PST); `create-message`
+(the same for an Outlook.com mailbox through Graph: JSON with the properties only
+creation sets, run by `apply-graph`); `attach` (a file of a message created
+without its files: over 25 MB for `recreate-mime`, every file for
+`create-message`; each `attach` waits for the message or the file before it); `create` (a typed calendar
 item, contact or task, as EWS XML); `contact-photo`; `create-rule`; `move`
 (misplaced, duplicate, damaged, replaced, unmatched); `discard-folder`.
 
@@ -198,7 +201,7 @@ property.
 | M7b ✅ | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
 | M7c ✅ | Calendar, contacts and photos, tasks, notes, inbox rules (`plan-pim`, `plan-contact-photos`, `plan-notes`, `plan-rules`) | Each type is copied without duplicates and checked on the target |
 | M8 ✅ | Release 0.1 | Documentation, binaries for Windows x64 |
-| M9 | Microsoft Graph as a target (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, then plans and `apply` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
+| M9 | Microsoft Graph as a target (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, `plan-pst --outlook-com` and `apply-graph` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
 
 ## 8. Testing
 
