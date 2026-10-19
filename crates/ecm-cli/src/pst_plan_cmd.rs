@@ -23,7 +23,7 @@ use ecm_store::{SOURCE_INVENTORY, read_inventory};
 
 use crate::{
     EwsArgs, connect,
-    plan_cmd::{created_items, folder_map},
+    plan_cmd::{created_items, folder_map, moved_items},
     verify_cmd::VERIFIED_INVENTORY,
 };
 
@@ -35,6 +35,29 @@ pub struct Replacements<'a> {
     pub sender: Option<&'a str>,
     /// Only replace; do not re-create messages the target lacks.
     pub only: bool,
+    /// Copies `check-content` found damaged: replaced in the folder they are in,
+    /// when an applied plan of `after` created or moved them.
+    pub damaged: Option<&'a Path>,
+}
+
+/// The target keys of the copies a `check-content` file lists.
+fn damaged_keys(path: &Path) -> Result<HashSet<String>, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut lines = text.trim_start_matches('\u{feff}').lines();
+    if lines
+        .next()
+        .is_none_or(|header| !header.starts_with("target_key,"))
+    {
+        return Err(format!(
+            "{}: not a file `ecm check-content` wrote",
+            path.display()
+        ));
+    }
+    Ok(lines
+        .filter_map(|line| line.split(',').next())
+        .map(|key| key.trim_matches('"').to_owned())
+        .filter(|key| !key.is_empty())
+        .collect())
 }
 
 /// Which PST messages a plan considers, and where they go.
@@ -75,7 +98,9 @@ pub fn plan_pst_command(
         after,
         sender,
         only: replacements_only,
+        damaged,
     } = *replacements;
+    let damaged = damaged.map(damaged_keys).transpose()?.unwrap_or_default();
     let cutoff = parse_utc(&format!("{cutoff}T00:00:00Z"))
         .ok_or_else(|| format!("invalid --cutoff {cutoff:?}: expected YYYY-MM-DD"))?;
     let mut source = read_inventory(&work.join(SOURCE_INVENTORY)).map_err(|e| e.to_string())?;
@@ -134,13 +159,39 @@ pub fn plan_pst_command(
     // Message-ID or sender: the PST's own copy replaces them, and every copy
     // made that way is set aside once it is back.
     let mut created = HashMap::new();
+    let mut moved = HashSet::new();
     for plan in after {
         created.extend(created_items(plan)?);
+        moved.extend(moved_items(plan)?);
     }
     let quarantine = path::join(&path::join("", QUARANTINE_FOLDER), &run);
     let mut copies: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut replace: Vec<usize> = Vec::new();
+    // Damaged copies are rebuilt where they are, with their read state: the
+    // user may have filed or read them since.
+    let mut in_place: HashMap<usize, usize> = HashMap::new();
+    // Damaged extra copies of a message whose kept copy is healthy: only set
+    // aside.
+    let mut damaged_duplicates: Vec<(usize, usize)> = Vec::new();
+    let mut not_ours = Vec::new();
     for (index, role) in audit.target_roles.iter().enumerate() {
+        let key = &target[index].key;
+        if damaged.contains(key) {
+            let ours = created.contains_key(key) || moved.contains(key);
+            match role {
+                TargetRole::Copy { source: s, .. } if ours => {
+                    replace.push(*s);
+                    copies.entry(*s).or_default().push(index);
+                    in_place.insert(*s, index);
+                }
+                TargetRole::Duplicate { source: s } if ours => {
+                    copies.entry(*s).or_default().push(index);
+                    damaged_duplicates.push((*s, index));
+                }
+                _ => not_ours.push(index),
+            }
+            continue;
+        }
         match role {
             TargetRole::Copy { source: s, defects }
                 if ecm_audit::verify::in_scope(&source[*s])
@@ -172,13 +223,31 @@ pub fn plan_pst_command(
         }
     }
     replace.sort_unstable();
+    replace.dedup();
+    for (s, index) in damaged_duplicates {
+        if replace.binary_search(&s).is_err() {
+            actions.push(Action::Move {
+                item: target[index].key.clone(),
+                to: quarantine.clone(),
+                reason: "damaged".into(),
+                requires: None,
+            });
+        }
+    }
+    if !not_ours.is_empty() {
+        println!(
+            "{} damaged copies left alone: no plan of --after created or moved them, or the PST message is not theirs.",
+            not_ours.len()
+        );
+    }
     for s in replace {
         let item = &source[s];
         let step = actions.len();
+        let copy = in_place.get(&s).map(|&index| &target[index]);
         actions.push(Action::Recreate {
             source: item.key.clone(),
-            to: folders.target(&item.folder),
-            read: item.read,
+            to: copy.map_or_else(|| folders.target(&item.folder), |c| c.folder.clone()),
+            read: copy.and_then(|c| c.read).or(item.read),
             sent: item.sent,
             received: item.received,
             subject: item.subject.clone(),
@@ -196,7 +265,7 @@ pub fn plan_pst_command(
     // Rebuild each re-created message from the PST.
     let before = ecm_pst::sha256_file(pst).map_err(|e| e.to_string())?;
     let mut failed: Vec<String> = Vec::new();
-    let mut skipped_attachments = 0;
+    let mut partial: Vec<String> = Vec::new();
     let mut dropped = HashSet::new();
     {
         let reader = ecm_pst::PstSource::open(pst).map_err(|e| e.to_string())?;
@@ -220,7 +289,12 @@ pub fn plan_pst_command(
                     dropped.insert(step);
                 }
                 Ok(content) => {
-                    skipped_attachments += content.skipped_attachments;
+                    if content.skipped_attachments > 0 {
+                        partial.push(format!(
+                            "{to}: {subject:?}: {} left out",
+                            content.skipped_attachments
+                        ));
+                    }
                     let mime = ecm_pst::content::to_mime_with(&content, sender);
                     *action = Action::RecreateMime {
                         to: to.clone(),
@@ -243,20 +317,33 @@ pub fn plan_pst_command(
         return Err(format!("{} changed while it was read", pst.display()));
     }
 
-    // Drop what could not be rebuilt, and the moves waiting for it, and the
-    // quarantine run folder when nothing is left to go into it.
-    let quarantine_used = actions.iter().any(|action| {
-        matches!(action, Action::Move { to, requires, .. }
-            if *to == quarantine && !requires.is_some_and(|r| dropped.contains(&r)))
-    });
+    // Drop what could not be rebuilt, the moves waiting for it, and the folders
+    // nothing is left to go into (the quarantine run folder when nothing is
+    // replaced, a source folder whose messages are all left out).
+    let waits_on_dropped = |action: &Action| matches!(action, Action::Move { requires: Some(r), .. } if dropped.contains(r));
+    let mut used: HashSet<String> = HashSet::new();
+    for (step, action) in actions.iter().enumerate() {
+        let to = match action {
+            Action::Recreate { to, .. }
+            | Action::RecreateMime { to, .. }
+            | Action::Move { to, .. } => to,
+            _ => continue,
+        };
+        if dropped.contains(&step) || waits_on_dropped(action) {
+            continue;
+        }
+        let mut folder = Some(to.clone());
+        while let Some(path) = folder.filter(|p| !p.is_empty()) {
+            folder = path::parent(&path);
+            used.insert(path);
+        }
+    }
     let mut index_map = HashMap::new();
     let mut kept = Vec::new();
     for (step, action) in actions.into_iter().enumerate() {
-        let waits_on_dropped =
-            matches!(&action, Action::Move { requires: Some(r), .. } if dropped.contains(r));
-        let unused_folder = !quarantine_used
-            && matches!(&action, Action::CreateFolder { path } if *path == quarantine);
-        if dropped.contains(&step) || waits_on_dropped || unused_folder {
+        let unused_folder =
+            matches!(&action, Action::CreateFolder { path } if !used.contains(path));
+        if dropped.contains(&step) || waits_on_dropped(&action) || unused_folder {
             continue;
         }
         index_map.insert(step, kept.len());
@@ -281,8 +368,15 @@ pub fn plan_pst_command(
     for (kind, n) in counts(&kept) {
         println!("  {kind:<14} {n:>7}");
     }
-    if skipped_attachments > 0 {
-        println!("{skipped_attachments} attachments left out (embedded messages or no data).");
+    if !partial.is_empty() {
+        println!();
+        println!(
+            "Rebuilt without some attachments: embedded messages, no data, or unreadable ({}):",
+            partial.len()
+        );
+        for line in &partial {
+            println!("  {line}");
+        }
     }
     if !failed.is_empty() {
         println!();

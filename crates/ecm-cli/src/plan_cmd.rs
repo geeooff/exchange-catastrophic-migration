@@ -204,7 +204,7 @@ pub fn discard_command(ews: &EwsArgs, runs: &[String], out: &Path) -> Result<(),
 
 /// Ids of the items an applied plan moved, from its journal (a moved item gets a
 /// new id, which the journal records).
-fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
+pub fn moved_items(plan: &Path) -> Result<HashSet<String>, String> {
     let actions = read_plan(plan)?;
     let journal = read_journal(&journal_path(plan))?;
     Ok(journal

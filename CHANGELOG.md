@@ -12,6 +12,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   restore into plans of a reasonable size.
 - `plan-pst --rename FROM=TO`: put the messages of a source folder, and of the
   folders under it, into a target folder renamed since.
+- `check-content`: compare the target copies of PST messages with the PST, body
+  and file attachment by attachment (missing, every LF turned into CRLF, otherwise
+  different), and write the damaged ones as CSV.
+- `plan-pst --damaged FILE`: rebuild those copies from the PST in the folder they
+  are in, and quarantine them, when an earlier plan created or moved them.
+- `source show`: a PST message's properties and attachments, like `target show`.
+- `target show --attachments` says which files are inline, with their Content-ID.
+
+### Fixed
+
+- A PST message with an attachment the PST library cannot open (an embedded
+  message without its data, no attach method) is rebuilt without it instead of
+  not at all; `plan-pst` lists the messages that lost attachments that way.
+- `plan-pst` no longer creates folders nothing goes into: the quarantine folder
+  when it replaces nothing, or, with `--replacements-only`, the folders of the
+  messages it leaves out.
 
 ## [0.1.0] - 2026-10-19
 

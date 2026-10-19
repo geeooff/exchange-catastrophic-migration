@@ -105,7 +105,8 @@ pub struct MessageContent {
     pub recipients: Vec<Recipient>,
     /// File attachments.
     pub attachments: Vec<AttachedFile>,
-    /// Attachments left out: embedded messages, or attachments without data.
+    /// Attachments left out: embedded messages, attachments without data, and
+    /// attachments the PST library cannot open.
     pub skipped_attachments: usize,
 }
 
@@ -158,8 +159,14 @@ impl PstSource {
         if let Some(table) = message.attachment_table() {
             for row in table.rows_matrix() {
                 let sub_node = NodeId::from(u32::from(row.id()));
-                let attachment = UnicodeAttachment::read(message.clone(), sub_node, None)
-                    .map_err(format_error)?;
+                // Some attachments `outlook-pst` cannot open (an embedded message
+                // without its data object, no attach method): the message is still
+                // rebuilt, without them.
+                let Ok(attachment) = UnicodeAttachment::read(message.clone(), sub_node, None)
+                else {
+                    content.skipped_attachments += 1;
+                    continue;
+                };
                 let properties: BTreeMap<u16, PropertyValue> = attachment
                     .properties()
                     .iter()

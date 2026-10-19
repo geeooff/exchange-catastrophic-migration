@@ -60,6 +60,10 @@ pub struct Attachment {
     pub name: String,
     /// MIME content type, as stored.
     pub content_type: String,
+    /// Whether it is shown in the body rather than listed with the files.
+    pub inline: bool,
+    /// `Content-ID`, by which an HTML body shows it.
+    pub content_id: Option<String>,
     /// The file's bytes.
     pub content: Vec<u8>,
 }
@@ -118,6 +122,8 @@ impl<T: Transport> EwsClient<T> {
                         .child_text("ContentType")
                         .unwrap_or_default()
                         .to_owned(),
+                    inline: attachment.child_text("IsInline") == Some("true"),
+                    content_id: attachment.child_text("ContentId").map(str::to_owned),
                     content: base64::engine::general_purpose::STANDARD
                         .decode(content.trim())
                         .map_err(|e| {
@@ -252,7 +258,7 @@ mod tests {
             (
                 200,
                 soap(
-                    r#"<m:GetAttachmentResponse><m:ResponseMessages><m:GetAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="AT1"/><t:Name>a.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:Content>/9j/</t:Content></t:FileAttachment></m:Attachments></m:GetAttachmentResponseMessage></m:ResponseMessages></m:GetAttachmentResponse>"#,
+                    r#"<m:GetAttachmentResponse><m:ResponseMessages><m:GetAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="AT1"/><t:Name>a.jpg</t:Name><t:ContentType>image/jpeg</t:ContentType><t:ContentId>a@b</t:ContentId><t:IsInline>true</t:IsInline><t:Content>/9j/</t:Content></t:FileAttachment></m:Attachments></m:GetAttachmentResponseMessage></m:ResponseMessages></m:GetAttachmentResponse>"#,
                 ),
             ),
         ]);
@@ -262,6 +268,8 @@ mod tests {
             [super::Attachment {
                 name: "a.jpg".into(),
                 content_type: "image/jpeg".into(),
+                inline: true,
+                content_id: Some("a@b".into()),
                 content: vec![0xFF, 0xD8, 0xFF],
             }]
         );
