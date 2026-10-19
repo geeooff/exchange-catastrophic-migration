@@ -46,7 +46,7 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
     moves what `ecm-unmatched` holds into a quarantine run folder.
     `ecm plan-pst … --sender "<Name> <address>" --replacements-only` replaces copies
     with a missing or internal (IMCEAEX) sender without re-creating messages the
-    user may have deleted since; messages with only an RTF body in the PST are kept.
+    user may have deleted since; a message whose RTF body cannot be converted is kept as it is.
 13. Discarding the quarantine is the user's decision, weeks after the repair:
     `ecm plan-discard --ews <url> [--run <name>] --out reports/plan-discard.jsonl`,
     then `apply`, moves run folders into Deleted Items; the user empties it.

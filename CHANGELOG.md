@@ -19,9 +19,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   are in, and quarantine them, when an earlier plan created or moved them.
 - `source show`: a PST message's properties and attachments, like `target show`.
 - `target show --attachments` says which files are inline, with their Content-ID.
+- PST bodies kept only as compressed RTF are recovered: the HTML or plain text the
+  RTF encapsulates ([MS-OXRTFEX]), else the text of the RTF, decoded in its code
+  pages. `source show` says when a body came from RTF.
 
 ### Fixed
 
+- A PST message with no body at all (only attachments, or a `Null` HTML body) is
+  rebuilt; it was left out as "RTF only".
 - A PST message with an attachment the PST library cannot open (an embedded
   message without its data, no attach method) is rebuilt without it instead of
   not at all; `plan-pst` lists the messages that lost attachments that way.

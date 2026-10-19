@@ -122,9 +122,10 @@ pub fn source_show(
                 "html_length",
                 content.html.as_ref().map_or(0, Vec::len).to_string(),
             ),
+            ("body_from_rtf", content.body_from_rtf.to_string()),
             (
                 "rebuildable",
-                ecm_pst::content::has_body(&content).to_string(),
+                (!ecm_pst::content::loses_body(&content)).to_string(),
             ),
             ("recipients", content.recipients.len().to_string()),
             (

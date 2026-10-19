@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+compressed-rtf.workspace = true
+encoding_rs.workspace = true
 ecm-model.workspace = true
 outlook-pst.workspace = true
 sha2.workspace = true

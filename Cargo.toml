@@ -21,6 +21,8 @@ ecm-store = { path = "crates/ecm-store" }
 
 base64 = "0.23"
 clap = { version = "4.5", features = ["derive"] }
+compressed-rtf = "1"
+encoding_rs = "0.8"
 outlook-pst = "1.2"
 quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
