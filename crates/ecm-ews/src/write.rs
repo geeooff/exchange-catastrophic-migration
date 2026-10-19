@@ -198,12 +198,30 @@ impl<T: Transport> EwsClient<T> {
             escape(content_type),
             base64::engine::general_purpose::STANDARD.encode(data)
         );
-        self.call(&body)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::MalformedResponse("CreateAttachment returned no message".into()))?
-            .into_result()
-            .map(|_| ())
+        // Right after a file, Exchange may still be storing it: the item's change
+        // key conflict it answers then passes after a pause.
+        let mut wait = std::time::Duration::from_secs(5);
+        loop {
+            let result = self
+                .call(&body)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    Error::MalformedResponse("CreateAttachment returned no message".into())
+                })?
+                .into_result()
+                .map(|_| ());
+            match result {
+                Err(Error::Response { code, .. })
+                    if code == "ErrorIrresolvableConflict"
+                        && wait <= std::time::Duration::from_secs(40) =>
+                {
+                    (self.sleep)(wait);
+                    wait *= 2;
+                }
+                other => return other,
+            }
+        }
     }
 
     /// Moves items to a folder. Nothing is deleted. Returns, per item, its new id
@@ -511,6 +529,27 @@ mod tests {
         let requests = fake.requests.borrow();
         assert!(requests[0].contains(r#"<m:ParentItemId Id="M1"/><m:Attachments><t:FileAttachment><t:Name>a&amp;b.mp4</t:Name><t:ContentType>video/mp4</t:ContentType><t:Content>YWJj</t:Content>"#));
         assert!(requests[1].contains(r#"<t:ContentType>image/png</t:ContentType><t:ContentId>logo@x</t:ContentId><t:IsInline>true</t:IsInline><t:Content>"#));
+    }
+
+    #[test]
+    fn retries_a_file_while_the_previous_one_is_being_stored() {
+        let conflict = r#"<m:CreateAttachmentResponse><m:ResponseMessages><m:CreateAttachmentResponseMessage ResponseClass="Error"><m:MessageText>The send or update operation could not be performed because the change key passed in the request does not match the current change key for the item.</m:MessageText><m:ResponseCode>ErrorIrresolvableConflict</m:ResponseCode></m:CreateAttachmentResponseMessage></m:ResponseMessages></m:CreateAttachmentResponse>"#;
+        let done = r#"<m:CreateAttachmentResponse><m:ResponseMessages><m:CreateAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Attachments><t:FileAttachment><t:AttachmentId Id="A2"/></t:FileAttachment></m:Attachments></m:CreateAttachmentResponseMessage></m:ResponseMessages></m:CreateAttachmentResponse>"#;
+        let fake = FakeTransport::new([(200, soap(conflict)), (200, soap(done))]);
+        EwsClient::new(&fake)
+            .with_sleep(|_| {})
+            .attach_file("M1", "b.mp4", "video/mp4", None, b"abc")
+            .unwrap();
+        assert_eq!(fake.requests.borrow().len(), 2);
+
+        let conflicts = std::iter::repeat_n((200, soap(conflict)), 5);
+        let fake = FakeTransport::new(conflicts);
+        let error = EwsClient::new(&fake)
+            .with_sleep(|_| {})
+            .attach_file("M1", "b.mp4", "video/mp4", None, b"abc")
+            .unwrap_err();
+        assert!(error.to_string().contains("ErrorIrresolvableConflict"));
+        assert_eq!(fake.requests.borrow().len(), 5);
     }
 
     #[test]
