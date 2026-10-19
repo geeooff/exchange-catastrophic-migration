@@ -31,6 +31,11 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
 10. Messages only the PST still has: `ecm plan-pst --ews <url> --work reports --pst <file> --cutoff <date> --after <applied plans…> --out reports/plan-pst.jsonl` rebuilds them as MIME (original headers, bodies, attachments, S/MIME signed entities) and replaces copies earlier plans made without Message-ID. Refresh `target.after.jsonl` with `ecm verify` first.
     For an older PST, a large restore goes in batches (`--keys <file>`, one PST key per line, about
     1,000 messages or 150 MB each), and `--rename FROM=TO` sends a folder renamed since to its new name.
+    Copies that look healthy can still be damaged when the source they came from already was:
+    `ecm check-content --ews <url> --work <dir> --pst <file> --out <dir>/damaged.csv` compares every copy
+    with its PST message (emptied body, missing or changed attachment, LF turned into CRLF), then
+    `ecm plan-pst … --after <applied plans…> --replacements-only --damaged <dir>/damaged.csv` rebuilds them
+    where they are and quarantines the damaged copies.
 11. Inbox rules: `ecm plan-rules --ews <url> --client-id <id> --out reports/plan-rules.jsonl`
     (asks for `MailboxSettings.Read`) maps each rule's folder to the target's,
     creating missing folders, and leaves out rules the target has by name. Rules

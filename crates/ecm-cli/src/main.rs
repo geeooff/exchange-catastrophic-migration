@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_cmd;
 mod cleanup_cmd;
+mod content_cmd;
 mod fidelity_cmd;
 mod notes_cmd;
 mod pim_cmd;
@@ -203,6 +204,32 @@ enum Command {
         /// another target folder, e.g. one renamed since. Repeat for each.
         #[arg(long = "rename", value_name = "FROM=TO")]
         renames: Vec<String>,
+        /// Copies `ecm check-content` found damaged: each is rebuilt from the PST
+        /// in the folder it is in, then quarantined, when a plan of `--after`
+        /// created or moved it.
+        #[arg(long, value_name = "FILE")]
+        damaged: Option<PathBuf>,
+    },
+    /// Compare the target copies of PST messages, found by Message-ID, with the
+    /// PST: emptied bodies, and each file attachment (missing, every LF turned
+    /// into CRLF, or otherwise different). Writes the damaged copies as CSV for
+    /// `plan-pst --damaged`. Uses `source.jsonl` and `target.after.jsonl`; only
+    /// reads both.
+    CheckContent {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Work directory holding the inventories.
+        #[arg(long, value_name = "DIR")]
+        work: PathBuf,
+        /// PST file. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
+        /// A file of PST item keys, one per line: compare only those messages.
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+        /// CSV file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
     },
     /// Write a plan that copies the Outlook.com inbox rules into the target, with
     /// their folders mapped to the target's, leaving out rules it has by name.
@@ -354,6 +381,24 @@ enum SourceCommand {
         #[arg(long)]
         all_folders: bool,
     },
+    /// Show PST messages by inventory key: sender, dates, bodies, attachments.
+    /// Only reads.
+    Show {
+        /// PST file to read. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
+        /// Item keys, as in the PST inventory's `key`.
+        #[arg(long = "key", value_name = "KEY", required = true)]
+        keys: Vec<String>,
+        /// Also show each file attachment's size, first bytes and SHA-256, and
+        /// whether its content looks like its type.
+        #[arg(long)]
+        attachments: bool,
+        /// With `--attachments`, also save the files into this directory, to open
+        /// them locally.
+        #[arg(long, value_name = "DIR", requires = "attachments")]
+        save: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -421,6 +466,30 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Source(SourceCommand::Show {
+            pst,
+            keys,
+            attachments,
+            save,
+        }) => report(content_cmd::source_show(
+            &pst,
+            &keys,
+            attachments,
+            save.as_deref(),
+        )),
+        Command::CheckContent {
+            ews,
+            work,
+            pst,
+            keys,
+            out,
+        } => report(content_cmd::check_content_command(
+            &ews,
+            &work,
+            &pst,
+            keys.as_deref(),
+            &out,
+        )),
         Command::Target(TargetCommand::Check { ews, all_folders }) => {
             report(target_check(&ews, all_folders))
         }
@@ -537,6 +606,7 @@ fn main() -> ExitCode {
             replacements_only,
             keys,
             renames,
+            damaged,
         } => report(pst_plan_cmd::plan_pst_command(
             &ews,
             &work,
@@ -546,6 +616,7 @@ fn main() -> ExitCode {
                 after: &after,
                 sender: sender.as_deref(),
                 only: replacements_only,
+                damaged: damaged.as_deref(),
             },
             &pst_plan_cmd::Selection {
                 keys: keys.as_deref(),
@@ -721,71 +792,18 @@ fn target_show(
         }
         if attachments {
             for file in client.attachments(id).map_err(|e| e.to_string())? {
-                let head: String = file
-                    .content
-                    .iter()
-                    .take(8)
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                let tail: String = file.content[file.content.len().saturating_sub(4)..]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                println!(
-                    "  file {:<40} {:<24} {:>9} bytes  starts {head}  ends {tail}  {}  sha256 {}",
-                    file.name,
-                    file.content_type,
-                    file.content.len(),
-                    content_check(&file.name, &file.content),
-                    sha256_hex(&file.content)
-                );
-                if let Some(dir) = save {
-                    let name: String = file
-                        .name
-                        .chars()
-                        .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
-                        .collect();
-                    let path = dir.join(name);
-                    std::fs::create_dir_all(dir)
-                        .and_then(|()| std::fs::write(&path, &file.content))
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                content_cmd::print_file(&file.name, &file.content_type, &file.content, save)?;
+                if file.inline || file.content_id.is_some() {
+                    println!(
+                        "       inline {}  content-id {}",
+                        file.inline,
+                        file.content_id.as_deref().unwrap_or("-")
+                    );
                 }
             }
         }
     }
     Ok(())
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-/// Whether a file's first bytes match what its extension promises, for common
-/// types.
-fn content_check(name: &str, content: &[u8]) -> &'static str {
-    let lower = name.to_lowercase();
-    let expected: &[&[u8]] = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        &[b"\xFF\xD8\xFF"]
-    } else if lower.ends_with(".png") {
-        &[b"\x89PNG"]
-    } else if lower.ends_with(".gif") {
-        &[b"GIF8"]
-    } else if lower.ends_with(".pdf") {
-        &[b"%PDF"]
-    } else if lower.ends_with(".zip") || lower.ends_with(".docx") || lower.ends_with(".xlsx") {
-        &[b"PK"]
-    } else {
-        return "type not checked";
-    };
-    if expected.iter().any(|magic| content.starts_with(magic)) {
-        "looks valid"
-    } else {
-        "DOES NOT LOOK VALID"
-    }
 }
 
 #[cfg(windows)]

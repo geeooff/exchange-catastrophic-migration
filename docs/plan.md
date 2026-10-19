@@ -101,6 +101,7 @@ Every command but `apply` only reads. `ecm <command> --help` gives the options.
 
 ```
 ecm source check   --pst <file>                 # open, checksum, folder tree, counts
+ecm source show    --pst <file> --key <key>     # one PST message's properties, attachments
 ecm target check   --ews <url>                  # authenticate, folder tree, counts, sizes
 ecm target show    --ews <url> --id <id>        # one item's properties, attachments
 ecm target pim     --ews <url>                  # calendar, contacts, inbox rules
@@ -113,6 +114,7 @@ ecm plan-pim | plan-contact-photos | plan-notes | plan-rules   # other item type
 ecm plan-park | plan-discard                    # set aside, then into Deleted Items
 ecm apply          --plan <file> [--dry-run] [--limit N]   # run it, journaled, resumable
 ecm verify         --ews <url> --work <dir> ... # re-inventory and check again
+ecm check-content  --ews <url> --pst <file> ... # copies vs the PST: bodies, attachments
 ecm report-cleanup --work <dir> --domain ...    # sort the old mailbox once a domain moved
 ecm fidelity-test  --ews <url> ...              # property-by-property spike in ecm-test
 ```

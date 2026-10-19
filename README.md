@@ -39,8 +39,11 @@ journals each step and resumes where it stopped.
      into Deleted Items, which you empty yourself. `ecm` never deletes anything.
 4. **Apply**: `ecm apply --plan <file> [--dry-run] [--limit N]`.
 5. **Verify**: `ecm verify` inventories the target again and checks every source
-   message has a healthy copy in its folder. `ecm target show --id <id> --attachments`
-   and `ecm target pim` inspect items, the calendar and the rules.
+   message has a healthy copy in its folder. `ecm check-content` compares each copy
+   with its PST message, body and attachment by attachment, and lists the damaged
+   ones for `ecm plan-pst --damaged`. `ecm target show --id <id> --attachments`,
+   `ecm source show --key <key> --attachments` and `ecm target pim` inspect items,
+   the calendar and the rules.
 
 When the source mailbox stays in use for other addresses, `ecm report-cleanup`
 sorts its messages into those to keep (they involve an address it keeps), those
