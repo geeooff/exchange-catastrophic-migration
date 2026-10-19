@@ -232,6 +232,24 @@ fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<St
     issues
 }
 
+/// The length of an item's body, as Exchange gives it.
+fn body_length<T: ecm_ews::Transport>(
+    client: &ecm_ews::EwsClient<T>,
+    id: &str,
+) -> Result<usize, String> {
+    let properties = client
+        .item_properties(&[id])
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{id}: GetItem returned no item"))?
+        .map_err(|e| e.to_string())?;
+    Ok(properties
+        .get("body_length")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0))
+}
+
 /// Compares every target copy found by Message-ID with its PST message: body
 /// lost, and each file attachment. Writes the copies with an issue as CSV.
 pub fn check_content_command(
@@ -285,7 +303,12 @@ pub fn check_content_command(
                     continue;
                 }
             };
-            let body_lost = ecm_pst::content::has_body(&content) && copy.body_empty == Some(true);
+            // The inventory says a body is empty from Exchange's preview, which is
+            // empty too for an HTML body without text (only photos) or not yet
+            // previewed: the copy's own body decides.
+            let body_lost = ecm_pst::content::has_body(&content)
+                && copy.body_empty == Some(true)
+                && body_length(&client, &copy.key)? == 0;
             // A signed message keeps its signed entity as a file: its copy has the
             // entity's own files instead.
             let signed = item.class.to_lowercase().starts_with("ipm.note.smime");
