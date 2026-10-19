@@ -196,6 +196,13 @@ enum Command {
         /// target lacks (the user may have deleted them since).
         #[arg(long)]
         replacements_only: bool,
+        /// A file of PST item keys, one per line: consider only those messages.
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+        /// `FROM=TO`: put messages of a source folder (and its sub-folders) into
+        /// another target folder, e.g. one renamed since. Repeat for each.
+        #[arg(long = "rename", value_name = "FROM=TO")]
+        renames: Vec<String>,
     },
     /// Write a plan that copies the Outlook.com inbox rules into the target, with
     /// their folders mapped to the target's, leaving out rules it has by name.
@@ -528,6 +535,8 @@ fn main() -> ExitCode {
             after,
             sender,
             replacements_only,
+            keys,
+            renames,
         } => report(pst_plan_cmd::plan_pst_command(
             &ews,
             &work,
@@ -537,6 +546,10 @@ fn main() -> ExitCode {
                 after: &after,
                 sender: sender.as_deref(),
                 only: replacements_only,
+            },
+            &pst_plan_cmd::Selection {
+                keys: keys.as_deref(),
+                renames: &renames,
             },
             &out,
         )),

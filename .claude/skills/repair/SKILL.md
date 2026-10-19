@@ -29,6 +29,8 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
    `ecm target pim` lists the target calendar to check times.
 9. Contact photos: `ecm plan-contact-photos --ews <url> --client-id <id> --out reports/plan-photos.jsonl`, then apply. It matches contacts by e-mail, then name, and skips those that already have a photo.
 10. Messages only the PST still has: `ecm plan-pst --ews <url> --work reports --pst <file> --cutoff <date> --after <applied plans…> --out reports/plan-pst.jsonl` rebuilds them as MIME (original headers, bodies, attachments, S/MIME signed entities) and replaces copies earlier plans made without Message-ID. Refresh `target.after.jsonl` with `ecm verify` first.
+    For an older PST, a large restore goes in batches (`--keys <file>`, one PST key per line, about
+    1,000 messages or 150 MB each), and `--rename FROM=TO` sends a folder renamed since to its new name.
 11. Inbox rules: `ecm plan-rules --ews <url> --client-id <id> --out reports/plan-rules.jsonl`
     (asks for `MailboxSettings.Read`) maps each rule's folder to the target's,
     creating missing folders, and leaves out rules the target has by name. Rules
