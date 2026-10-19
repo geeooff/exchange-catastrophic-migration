@@ -10,6 +10,7 @@ mod audit_cmd;
 mod cleanup_cmd;
 mod content_cmd;
 mod fidelity_cmd;
+mod graph_cmd;
 mod notes_cmd;
 mod pim_cmd;
 mod plan_cmd;
@@ -111,6 +112,38 @@ enum Command {
         /// Items per test.
         #[arg(long, default_value_t = 3)]
         count: usize,
+    },
+    /// Re-create a few PST messages in the `ecm-test` folder of an Outlook.com
+    /// mailbox through Microsoft Graph, from MIME and from JSON, and compare each
+    /// copy with a known good one and the PST's files. Only creates items, only in
+    /// that folder; asks for `Mail.ReadWrite`.
+    FidelityGraph {
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// PST file. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
+        /// A file of PST item keys, one per line: the messages to re-create.
+        #[arg(long, value_name = "FILE")]
+        keys: PathBuf,
+        /// Mailbox written as `From` when a message has none (sent items), e.g.
+        /// `Name <address>`.
+        #[arg(long, value_name = "MAILBOX")]
+        sender: Option<String>,
+        /// EWS endpoint of an Exchange mailbox holding known good copies, found by
+        /// Message-ID in `--work`'s `target.after.jsonl`, to compare with.
+        #[arg(long, value_name = "URL", requires = "work")]
+        ews: Option<String>,
+        /// Credential name for `--ews`, `ecm:HOST` by default.
+        #[arg(long, value_name = "NAME", requires = "ews")]
+        credential: Option<String>,
+        /// Work directory holding the Exchange inventory.
+        #[arg(long, value_name = "DIR")]
+        work: Option<PathBuf>,
     },
     /// Write a reviewable plan of repair actions (JSON Lines). Only reads.
     Plan {
@@ -216,8 +249,23 @@ enum Command {
     /// `plan-pst --damaged`. Uses `source.jsonl` and `target.after.jsonl`; only
     /// reads both.
     CheckContent {
-        #[command(flatten)]
-        ews: EwsArgs,
+        /// EWS endpoint of the Exchange mailbox holding the copies
+        /// (`target.after.jsonl`).
+        #[arg(long, value_name = "URL", required_unless_present = "outlook_com")]
+        ews: Option<String>,
+        /// Credential name for `--ews`, `ecm:HOST` by default.
+        #[arg(long, value_name = "NAME", requires = "ews")]
+        credential: Option<String>,
+        /// Read the copies in an Outlook.com mailbox through Microsoft Graph
+        /// instead (`outlook.jsonl`). You sign in in your browser with a code.
+        #[arg(long, conflicts_with = "ews", requires = "client_id")]
+        outlook_com: bool,
+        /// Client id of the app registration used to sign in to Microsoft Graph.
+        #[arg(long, value_name = "ID")]
+        client_id: Option<String>,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
         /// Work directory holding the inventories.
         #[arg(long, value_name = "DIR")]
         work: PathBuf,
@@ -479,17 +527,50 @@ fn main() -> ExitCode {
         )),
         Command::CheckContent {
             ews,
+            credential,
+            outlook_com: _,
+            client_id,
+            tenant,
             work,
             pst,
             keys,
             out,
-        } => report(content_cmd::check_content_command(
-            &ews,
-            &work,
-            &pst,
-            keys.as_deref(),
-            &out,
-        )),
+        } => {
+            let ews = ews.map(|ews| EwsArgs { ews, credential });
+            let graph = client_id.map(|client_id| audit_cmd::GraphArgs { client_id, tenant });
+            let copies = match (&ews, &graph) {
+                (Some(ews), _) => content_cmd::CopiesArgs::Ews(ews),
+                (None, Some(graph)) => content_cmd::CopiesArgs::Graph(graph),
+                (None, None) => unreachable!("clap requires --ews or --outlook-com"),
+            };
+            report(content_cmd::check_content_command(
+                &copies,
+                &work,
+                &pst,
+                keys.as_deref(),
+                &out,
+            ))
+        }
+        Command::FidelityGraph {
+            client_id,
+            tenant,
+            pst,
+            keys,
+            sender,
+            ews,
+            credential,
+            work,
+        } => {
+            let ews = ews.map(|ews| EwsArgs { ews, credential });
+            let reference = ews.as_ref().zip(work.as_deref());
+            report(graph_cmd::fidelity_graph(
+                &audit_cmd::GraphArgs { client_id, tenant },
+                &pst,
+                &keys,
+                sender.as_deref(),
+                reference,
+            ))
+        }
         Command::Target(TargetCommand::Check { ews, all_folders }) => {
             report(target_check(&ews, all_folders))
         }

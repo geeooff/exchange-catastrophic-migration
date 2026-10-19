@@ -236,7 +236,7 @@ fn reupload_from_outlook<T: ecm_ews::Transport>(
 
 /// Prints the compared properties of a reference and its copies, marking each
 /// copy's value ✓ (same) or ✗ (different), then the differences count.
-fn print_comparison(
+pub(crate) fn print_comparison(
     reference_name: &str,
     reference: &PropertyMap,
     copies: &[(&str, &PropertyMap)],

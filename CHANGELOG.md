@@ -29,12 +29,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - PST bodies kept only as compressed RTF are recovered: the HTML or plain text the
   RTF encapsulates ([MS-OXRTFEX]), else the text of the RTF, decoded in its code
   pages. `source show` says when a body came from RTF.
+- `check-content --outlook-com`: compare the copies in an Outlook.com mailbox
+  through Microsoft Graph, files read whole and bodies judged by what they show.
+- `fidelity-graph`: re-create a few PST messages in the `ecm-test` folder of an
+  Outlook.com mailbox through Graph, from MIME and from JSON with the properties
+  only creation sets, and compare each copy with a known good one and the PST's
+  files. It asks for `Mail.ReadWrite`.
 - A PST message over 25 MB is created without its files, then given them one
   request each (plan step `attach`): an Exchange server refuses too large a
   request (HTTP 413).
 
 ### Fixed
 
+- A file with a Content-ID the HTML body never shows is sent as an attachment,
+  not inline: targets hid such files (the PST keeps Content-IDs on many photos).
 - A PST message with no body at all (only attachments, or a `Null` HTML body) is
   rebuilt; it was left out as "RTF only".
 - A PST message with an attachment the PST library cannot open (an embedded

@@ -11,6 +11,8 @@ arrived after the migration.
 > **Status: 0.1, used on a real mailbox.** It repaired a mailbox of
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
+> An Outlook.com mailbox as a target, through Microsoft Graph, is being validated
+> (`ecm fidelity-graph`, `ecm check-content --outlook-com`).
 
 ## How it works
 

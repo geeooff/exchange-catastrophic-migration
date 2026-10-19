@@ -316,7 +316,19 @@ pub fn plan_pst_command(
                             "{to}: {subject:?}: {} files",
                             content.attachments.len()
                         ));
-                        files.insert(step, content.attachments);
+                        // Files go with the Content-ID only the HTML shows.
+                        let shown: Vec<Option<String>> = content
+                            .attachments
+                            .iter()
+                            .map(|f| {
+                                ecm_pst::content::shown_content_id(&content, f).map(str::to_owned)
+                            })
+                            .collect();
+                        let mut attachments = content.attachments;
+                        for (file, id) in attachments.iter_mut().zip(shown) {
+                            file.content_id = id;
+                        }
+                        files.insert(step, attachments);
                     }
                     *action = Action::RecreateMime {
                         to: to.clone(),

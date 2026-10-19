@@ -248,7 +248,7 @@ pub fn plan_contact_photos_command(_: &EwsArgs, _: &GraphArgs, _: &Path) -> Resu
 }
 
 #[cfg(windows)]
-fn sign_in(
+pub fn sign_in(
     graph: &GraphArgs,
 ) -> Result<ecm_graph::GraphClient<ecm_graph::WinHttpTransport>, String> {
     let transport = ecm_graph::WinHttpTransport::default();

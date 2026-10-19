@@ -14,8 +14,9 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - `ecm-http`: WinHTTP + NTLM/Negotiate, Credential Manager. Only crate with `unsafe`.
 - `ecm-ews`: hand-written SOAP + `quick-xml` tree: folders, items, export (backup),
   details, calendar and contact listings; every change in `write`.
-- `ecm-graph`: read-only Microsoft Graph source (Outlook.com): device code sign-in,
-  mail, calendar, contacts, To Do, inbox rules.
+- `ecm-graph`: Microsoft Graph (Outlook.com): device code sign-in, mail, calendar,
+  contacts, To Do, inbox rules as a source; as a target (M9, in progress), every
+  change in `write`.
 - `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching, defects, plans,
   verification.
 - `ecm-cli`: the `ecm` binary, one module per command family.
@@ -77,6 +78,15 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - Migration copies can look healthy and still be damaged: emptied bodies (detected
   with the EWS `item:Preview` and Graph `bodyPreview`), duplicated recipients, and
   attachments where every LF byte became CRLF. Never trust them: replace them.
+- Graph as a target: a message created from MIME stays a draft, gets the current
+  time as received date, and has addresses of the account's aliases rewritten to
+  its primary one. Create it from JSON instead, with `singleValueExtendedProperties`
+  set at creation: `Integer 0x0E07` (flags, read and not a draft), `SystemTime
+  0x0E06` and `0x0039` (received, sent), `String 0x007D` (Internet headers). A file
+  sent inline (with a Content-ID) is hidden from the files: inline only when the
+  HTML shows it (`cid:`). Requests take about 4 MB: larger files go through upload
+  sessions; Outlook.com refuses messages past about 40 MB. A device code expires
+  after 15 minutes.
 - EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
   in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
   each Graph event again with `Prefer: outlook.timezone` in its own zone.
