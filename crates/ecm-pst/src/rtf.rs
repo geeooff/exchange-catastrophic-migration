@@ -213,7 +213,7 @@ impl Out {
 }
 
 /// The encoding of a Windows code page; Western European when unknown.
-fn encoding(code_page: u32) -> &'static encoding_rs::Encoding {
+pub(crate) fn encoding(code_page: u32) -> &'static encoding_rs::Encoding {
     use encoding_rs::*;
     match code_page {
         65001 => UTF_8,

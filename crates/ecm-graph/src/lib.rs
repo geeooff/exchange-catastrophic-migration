@@ -1,14 +1,15 @@
-//! Read-only Microsoft Graph source: Outlook.com (personal Microsoft accounts) and
-//! Microsoft 365 mailboxes.
+//! Microsoft Graph: Outlook.com (personal Microsoft accounts) and Microsoft 365
+//! mailboxes, read as a source and, through [`write`](mod@write) only, changed as a target.
 //!
 //! Sign-in uses the OAuth 2.0 device code flow: the user opens a Microsoft page,
-//! types a short code and signs in there. This tool never sees the password, asks
-//! only for read permissions, and keeps the token in memory for the run.
+//! types a short code and signs in there. This tool never sees the password and
+//! keeps the tokens in memory for the run. Reading asks only for read
+//! permissions; changing a mailbox asks for `Mail.ReadWrite`.
 //!
 //! It needs the client id of an app registration that allows personal Microsoft
 //! accounts and public client flows, with the delegated `Mail.Read`,
-//! `Contacts.Read`, `Calendars.Read`, `Tasks.Read` and `User.Read` permissions, and
-//! `MailboxSettings.Read` to read inbox rules.
+//! `Contacts.Read`, `Calendars.Read`, `Tasks.Read` and `User.Read` permissions,
+//! `MailboxSettings.Read` to read inbox rules, and `Mail.ReadWrite` to write.
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +20,7 @@ use serde_json::Value;
 pub mod auth;
 pub mod mail;
 pub mod pim;
+pub mod write;
 
 /// Errors from Microsoft Graph and its sign-in.
 #[derive(Debug, thiserror::Error)]
@@ -174,6 +176,20 @@ impl<T: Transport> GraphClient<T> {
         accept: &str,
         time_zone: Option<&str>,
     ) -> Result<(u16, Vec<u8>)> {
+        self.request("GET", url, accept, None, &[], time_zone)
+    }
+
+    /// Sends a request with a body of `content_type`, waiting and retrying when
+    /// throttled, and returns the status and body of a success.
+    pub(crate) fn request(
+        &self,
+        method: &str,
+        url: &str,
+        accept: &str,
+        content_type: Option<&str>,
+        body: &[u8],
+        time_zone: Option<&str>,
+    ) -> Result<(u16, Vec<u8>)> {
         let url = if url.starts_with("https://") {
             url.to_owned()
         } else {
@@ -184,13 +200,16 @@ impl<T: Transport> GraphClient<T> {
             Some(zone) => format!("IdType=\"ImmutableId\", outlook.timezone=\"{zone}\""),
             None => "IdType=\"ImmutableId\"".to_owned(),
         };
-        let headers = [
+        let mut headers = vec![
             ("Authorization", authorization.as_str()),
             ("Accept", accept),
             ("Prefer", prefer.as_str()),
         ];
+        if let Some(content_type) = content_type {
+            headers.push(("Content-Type", content_type));
+        }
         for attempt in 1..=MAX_ATTEMPTS {
-            let response = self.transport.send("GET", &url, &headers, &[])?;
+            let response = self.transport.send(method, &url, &headers, body)?;
             let (status, body) = (response.status, response.body);
             if status == 429 || status == 503 {
                 if attempt < MAX_ATTEMPTS {

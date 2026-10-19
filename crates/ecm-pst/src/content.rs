@@ -385,7 +385,9 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
         let name = encoded_word(&file.name);
         out.push_str(&format!("Content-Type: {mime_type}; name=\"{name}\"\r\n"));
         out.push_str("Content-Transfer-Encoding: base64\r\n");
-        let disposition = if file.content_id.is_some() {
+        // Inline only when the HTML shows it: a Content-ID alone does not hide a
+        // file the body never uses.
+        let disposition = if shown_content_id(content, file).is_some() {
             "inline"
         } else {
             "attachment"
@@ -404,6 +406,30 @@ pub fn to_mime_with(content: &MessageContent, sender: Option<&str>) -> Vec<u8> {
     }
     out.push_str(&format!("\r\n--{boundary}--\r\n"));
     out.into_bytes()
+}
+
+/// The `Content-ID` of a file the HTML body shows (`cid:`), else `None`: many
+/// files carry a `Content-ID` the body never uses, and a target would hide them
+/// as inline images.
+pub fn shown_content_id<'a>(content: &MessageContent, file: &'a AttachedFile) -> Option<&'a str> {
+    let id = file.content_id.as_deref()?.trim_matches(['<', '>']);
+    let html = content.html.as_ref()?;
+    let needle = format!("cid:{id}").to_ascii_lowercase().into_bytes();
+    html.to_ascii_lowercase()
+        .windows(needle.len())
+        .any(|w| w == needle)
+        .then_some(id)
+}
+
+/// The HTML body as text, decoded from its code page (Western European when
+/// unknown).
+pub fn html_text(content: &MessageContent) -> Option<String> {
+    let html = content.html.as_ref()?;
+    let code_page = content
+        .code_page
+        .and_then(|cp| u32::try_from(cp).ok())
+        .unwrap_or(65001);
+    Some(crate::rtf::encoding(code_page).decode(html).0.into_owned())
 }
 
 /// Whether rebuilding `content` as MIME would lose its body: an RTF body nothing
@@ -589,6 +615,27 @@ fn rfc2822(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_is_inline_only_when_the_html_shows_it() {
+        let file = |id: &str| AttachedFile {
+            name: "a.jpg".into(),
+            mime_type: Some("image/jpeg".into()),
+            content_id: Some(id.into()),
+            data: vec![1],
+        };
+        let content = MessageContent {
+            html: Some(br#"<img src="CID:logo@x">"#.to_vec()),
+            ..Default::default()
+        };
+        assert_eq!(
+            shown_content_id(&content, &file("<logo@x>")),
+            Some("logo@x")
+        );
+        assert_eq!(shown_content_id(&content, &file("photo@x")), None);
+        let text_only = MessageContent::default();
+        assert_eq!(shown_content_id(&text_only, &file("logo@x")), None);
+    }
 
     fn decode_part(mime: &str, after: &str) -> Vec<u8> {
         let start = mime.find(after).expect("part header") + after.len();

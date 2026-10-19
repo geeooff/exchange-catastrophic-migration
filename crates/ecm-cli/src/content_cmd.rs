@@ -7,7 +7,12 @@ use ecm_audit::verify::is_parked;
 use ecm_model::item::format_utc;
 use ecm_store::{SOURCE_INVENTORY, read_inventory, write_csv};
 
-use crate::{EwsArgs, connect, verify_cmd::VERIFIED_INVENTORY};
+use crate::{
+    EwsArgs,
+    audit_cmd::{GraphArgs, OUTLOOK_INVENTORY},
+    connect,
+    verify_cmd::VERIFIED_INVENTORY,
+};
 
 /// The issues file `check-content` writes, read back by `plan-pst --damaged`.
 pub const DAMAGED_HEADER: [&str; 7] = [
@@ -250,14 +255,15 @@ fn attachment_issues(source: &[(&str, &[u8])], copy: &[(&str, &[u8])]) -> Vec<St
 /// Whether a PST message's body shows something: text, or an image in its HTML.
 /// An HTML body with neither, as meeting replies have, loses nothing when empty.
 fn shows_something(content: &ecm_pst::content::MessageContent) -> bool {
-    if content
-        .text
-        .as_deref()
-        .is_some_and(|t| !t.trim().is_empty())
-    {
+    body_shows(content.text.as_deref(), content.html.as_deref())
+}
+
+/// Whether a body shows something: text, or an image or text in its HTML.
+fn body_shows(text: Option<&str>, html: Option<&[u8]>) -> bool {
+    if text.is_some_and(|t| !t.trim().is_empty()) {
         return true;
     }
-    let Some(html) = &content.html else {
+    let Some(html) = html else {
         return false;
     };
     let lower = html.to_ascii_lowercase();
@@ -300,33 +306,130 @@ fn shows_something(content: &ecm_pst::content::MessageContent) -> bool {
         .any(|c| !c.is_whitespace() && c != '\u{a0}')
 }
 
+/// A copy's files, as name and content.
+pub type Files = Vec<(String, Vec<u8>)>;
+
+/// Where the copies compared with the PST are read: an Exchange mailbox (EWS) or
+/// an Outlook.com one (Graph). Each answers `None` for a copy deleted or moved
+/// since the inventory.
+pub trait Copies {
+    /// The copy's files, as name and content.
+    fn files(&self, id: &str) -> Result<Option<Files>, String>;
+    /// Whether the copy's body shows something.
+    fn body_shows(&self, id: &str) -> Result<Option<bool>, String>;
+}
+
+impl<T: ecm_ews::Transport> Copies for ecm_ews::EwsClient<T> {
+    fn files(&self, id: &str) -> Result<Option<Files>, String> {
+        match self.attachments(id) {
+            Ok(files) => Ok(Some(
+                files.into_iter().map(|f| (f.name, f.content)).collect(),
+            )),
+            Err(error) if ews_gone(&error) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn body_shows(&self, id: &str) -> Result<Option<bool>, String> {
+        // Exchange gives an empty body as no content at all.
+        let properties = match self.item_properties(&[id]) {
+            Ok(items) => items.into_iter().next(),
+            Err(error) if ews_gone(&error) => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        match properties {
+            None => Err(format!("{id}: GetItem returned no item")),
+            Some(Err(error)) if ews_gone(&error) => Ok(None),
+            Some(Err(error)) => Err(error.to_string()),
+            Some(Ok(properties)) => Ok(Some(
+                properties
+                    .get("body_length")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(0)
+                    > 0,
+            )),
+        }
+    }
+}
+
+impl<T: ecm_graph::Transport> Copies for ecm_graph::GraphClient<T> {
+    fn files(&self, id: &str) -> Result<Option<Files>, String> {
+        match self.attachments(id) {
+            Ok(files) => Ok(Some(
+                files.into_iter().map(|f| (f.name, f.content)).collect(),
+            )),
+            Err(error) if graph_gone(&error) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn body_shows(&self, id: &str) -> Result<Option<bool>, String> {
+        // Graph gives an empty HTML body as an HTML skeleton: what it shows decides.
+        match self.body(id) {
+            Ok((kind, content)) if kind == "html" => {
+                Ok(Some(body_shows(None, Some(content.as_bytes()))))
+            }
+            Ok((_, content)) => Ok(Some(body_shows(Some(&content), None))),
+            Err(error) if graph_gone(&error) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
 /// Whether an EWS error says the item is no longer there.
-fn gone(error: &ecm_ews::Error) -> bool {
+fn ews_gone(error: &ecm_ews::Error) -> bool {
     matches!(error, ecm_ews::Error::Response { code, .. } if code == "ErrorItemNotFound")
 }
 
-/// The length of an item's body, as Exchange gives it.
-fn body_length<T: ecm_ews::Transport>(
-    client: &ecm_ews::EwsClient<T>,
-    id: &str,
-) -> ecm_ews::Result<usize> {
-    let properties = client
-        .item_properties(&[id])?
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            ecm_ews::Error::MalformedResponse(format!("{id}: GetItem returned no item"))
-        })??;
-    Ok(properties
-        .get("body_length")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0))
+/// Whether a Graph error says the message is no longer there.
+fn graph_gone(error: &ecm_graph::Error) -> bool {
+    matches!(error, ecm_graph::Error::Graph { status: 404, .. })
 }
 
-/// Compares every target copy found by Message-ID with its PST message: body
-/// lost, and each file attachment. Writes the copies with an issue as CSV.
+/// Where `check-content` reads the copies, and which inventory lists them.
+pub enum CopiesArgs<'a> {
+    /// The target Exchange mailbox, listed in `target.after.jsonl`.
+    Ews(&'a EwsArgs),
+    /// An Outlook.com mailbox through Graph, listed in `outlook.jsonl`.
+    Graph(&'a GraphArgs),
+}
+
+/// Compares every copy found by Message-ID with its PST message: body lost,
+/// and each file attachment. Writes the copies with an issue as CSV.
 pub fn check_content_command(
-    ews: &EwsArgs,
+    copies: &CopiesArgs<'_>,
+    work: &Path,
+    pst: &Path,
+    keys: Option<&Path>,
+    out: &Path,
+) -> Result<(), String> {
+    match copies {
+        CopiesArgs::Ews(ews) => {
+            let client = connect(ews)?;
+            check_content(
+                &client,
+                &work.join(VERIFIED_INVENTORY),
+                work,
+                pst,
+                keys,
+                out,
+            )
+        }
+        #[cfg(windows)]
+        CopiesArgs::Graph(graph) => {
+            let client = crate::pim_cmd::sign_in(graph)?;
+            check_content(&client, &work.join(OUTLOOK_INVENTORY), work, pst, keys, out)
+        }
+        #[cfg(not(windows))]
+        CopiesArgs::Graph(_) => {
+            Err("Microsoft Graph access needs Windows for now (WinHTTP)".into())
+        }
+    }
+}
+
+fn check_content(
+    client: &dyn Copies,
+    copy_inventory: &Path,
     work: &Path,
     pst: &Path,
     keys: Option<&Path>,
@@ -338,8 +441,8 @@ pub fn check_content_command(
         let keys: std::collections::HashSet<&str> = text.lines().map(str::trim).collect();
         source.retain(|item| keys.contains(item.key.as_str()));
     }
-    let target: Vec<_> = read_inventory(&work.join(VERIFIED_INVENTORY))
-        .map_err(|e| e.to_string())?
+    let target: Vec<_> = read_inventory(copy_inventory)
+        .map_err(|e| format!("{}: {e}", copy_inventory.display()))?
         .into_iter()
         .filter(|item| !is_parked(&item.folder))
         .collect();
@@ -357,7 +460,6 @@ pub fn check_content_command(
         .flat_map(|(s, copies)| copies.iter().map(move |&c| (s, c)))
         .collect();
 
-    let client = connect(ews)?;
     let before = ecm_pst::sha256_file(pst).map_err(|e| e.to_string())?;
     let mut rows = Vec::new();
     let mut counts: HashMap<&str, usize> = HashMap::new();
@@ -376,18 +478,17 @@ pub fn check_content_command(
                     continue;
                 }
             };
-            // The inventory says a body is empty from Exchange's preview, which is
-            // empty too for an HTML body without text (only photos) or not yet
-            // previewed: the copy's own body decides.
-            // A copy deleted or moved since the inventory is not compared.
+            // The inventory says a body is empty from the server's preview, which
+            // is empty too for an HTML body without text (only photos) or not yet
+            // previewed: the copy's own body decides. A copy deleted or moved since
+            // the inventory is not compared.
             let body_lost = if shows_something(&content) && copy.body_empty == Some(true) {
-                match body_length(&client, &copy.key) {
-                    Ok(length) => length == 0,
-                    Err(error) if gone(&error) => {
+                match client.body_shows(&copy.key)? {
+                    Some(shows) => !shows,
+                    None => {
                         *counts.entry("gone since the inventory").or_default() += 1;
                         continue;
                     }
-                    Err(error) => return Err(error.to_string()),
                 }
             } else {
                 false
@@ -397,13 +498,9 @@ pub fn check_content_command(
             let signed = item.class.to_lowercase().starts_with("ipm.note.smime");
             let mut issues = Vec::new();
             if !signed && (!content.attachments.is_empty() || copy.has_attachments == Some(true)) {
-                let files = match client.attachments(&copy.key) {
-                    Ok(files) => files,
-                    Err(error) if gone(&error) => {
-                        *counts.entry("gone since the inventory").or_default() += 1;
-                        continue;
-                    }
-                    Err(error) => return Err(error.to_string()),
+                let Some(files) = client.files(&copy.key)? else {
+                    *counts.entry("gone since the inventory").or_default() += 1;
+                    continue;
                 };
                 let ours: Vec<(&str, &[u8])> = content
                     .attachments
@@ -412,7 +509,7 @@ pub fn check_content_command(
                     .collect();
                 let theirs: Vec<(&str, &[u8])> = files
                     .iter()
-                    .map(|a| (a.name.as_str(), a.content.as_slice()))
+                    .map(|(name, content)| (name.as_str(), content.as_slice()))
                     .collect();
                 issues = attachment_issues(&ours, &theirs);
             }

@@ -17,6 +17,10 @@ pub const SCOPES: &str = "Mail.Read Contacts.Read Calendars.Read Tasks.Read User
 pub const LONG_RUN_SCOPES: &str =
     "Mail.Read Contacts.Read Calendars.Read Tasks.Read User.Read offline_access";
 
+/// Permissions asked for to change a mailbox ([`crate::write`](mod@crate::write)), with a refresh
+/// token for long runs.
+pub const WRITE_SCOPES: &str = "Mail.ReadWrite User.Read offline_access";
+
 /// Tokens from a sign-in. Kept in memory only, never written or logged.
 pub struct Tokens {
     /// Bearer token for Graph requests.
@@ -89,12 +93,42 @@ pub fn sign_in_for_long_run<T: Transport>(
     )
 }
 
+/// Signs in to change the mailbox ([`WRITE_SCOPES`]), with a refresh token for
+/// [`refresh_with`]. The user is asked to consent to `Mail.ReadWrite` once.
+pub fn sign_in_to_write<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    prompt: &mut dyn FnMut(&DeviceCodePrompt),
+) -> Result<Tokens> {
+    sign_in_with_sleep(
+        transport,
+        client_id,
+        tenant,
+        WRITE_SCOPES,
+        prompt,
+        thread::sleep,
+    )
+}
+
 /// Gets new tokens from a refresh token, without the user.
 pub fn refresh<T: Transport>(
     transport: &T,
     client_id: &str,
     tenant: &str,
     refresh_token: &str,
+) -> Result<Tokens> {
+    refresh_with(transport, client_id, tenant, refresh_token, LONG_RUN_SCOPES)
+}
+
+/// Like [`refresh`], for tokens signed in with other `scopes` (such as
+/// [`WRITE_SCOPES`]).
+pub fn refresh_with<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    refresh_token: &str,
+    scopes: &str,
 ) -> Result<Tokens> {
     let (status, token) = post_form(
         transport,
@@ -103,7 +137,7 @@ pub fn refresh<T: Transport>(
             ("grant_type", "refresh_token"),
             ("client_id", client_id),
             ("refresh_token", refresh_token),
-            ("scope", LONG_RUN_SCOPES),
+            ("scope", scopes),
         ],
     )?;
     if status != 200 {

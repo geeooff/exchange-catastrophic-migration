@@ -146,7 +146,55 @@ impl<T: Transport> GraphClient<T> {
     }
 }
 
+/// A file attached to a message, with its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphAttachment {
+    /// File name.
+    pub name: String,
+    /// MIME content type, as stored.
+    pub content_type: String,
+    /// Whether the body shows it rather than listing it with the files.
+    pub inline: bool,
+    /// The file's bytes.
+    pub content: Vec<u8>,
+}
+
 impl<T: Transport> GraphClient<T> {
+    /// The file attachments of a message, with their content (each file read raw,
+    /// so that large ones come whole). Attached messages are left out. Only reads.
+    pub fn attachments(&self, message_id: &str) -> Result<Vec<GraphAttachment>> {
+        let base = format!("/me/messages/{}/attachments", encode(message_id));
+        let mut files = Vec::new();
+        for value in self.get_all(&format!("{base}?$select=id,name,contentType,isInline"))? {
+            if value["@odata.type"].as_str() != Some("#microsoft.graph.fileAttachment") {
+                continue;
+            }
+            let id = value["id"]
+                .as_str()
+                .ok_or_else(|| Error::MalformedResponse("attachment without id".into()))?;
+            files.push(GraphAttachment {
+                name: value["name"].as_str().unwrap_or_default().to_owned(),
+                content_type: value["contentType"].as_str().unwrap_or_default().to_owned(),
+                inline: value["isInline"].as_bool().unwrap_or(false),
+                content: self.get_raw(&format!("{base}/{}/$value", encode(id)))?,
+            });
+        }
+        Ok(files)
+    }
+
+    /// A message's body: its type (`html` or `text`) and its content.
+    pub fn body(&self, message_id: &str) -> Result<(String, String)> {
+        let message = self.get(&format!("/me/messages/{}?$select=body", encode(message_id)))?;
+        let body = &message["body"];
+        Ok((
+            body["contentType"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase(),
+            body["content"].as_str().unwrap_or_default().to_owned(),
+        ))
+    }
+
     /// A message's MIME content, as Outlook.com stores it.
     pub fn mime(&self, message_id: &str) -> Result<Vec<u8>> {
         self.get_raw(&format!("/me/messages/{}/$value", encode(message_id)))
@@ -401,6 +449,45 @@ fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
 #[cfg(test)]
 mod tests {
     use crate::{GraphClient, testing::FakeTransport};
+
+    #[test]
+    fn reads_file_attachments_raw_and_the_body() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                r##"{"value":[
+                    {"@odata.type":"#microsoft.graph.fileAttachment","id":"A1","name":"v.mp4","contentType":"video/mp4","isInline":false},
+                    {"@odata.type":"#microsoft.graph.itemAttachment","id":"A2","name":"Fwd"}]}"##
+                    .into(),
+            ),
+            (200, "\u{0}\r\n\u{1}".into()),
+            (
+                200,
+                r#"{"body":{"contentType":"HTML","content":"<p>Bonjour</p>"}}"#.into(),
+            ),
+        ]);
+        let client = GraphClient::new(&fake, "t".into());
+        let files = client.attachments("M/1").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "v.mp4");
+        assert_eq!(files[0].content, b"\0\r\n\x01");
+        assert_eq!(
+            client.body("M/1").unwrap(),
+            ("html".into(), "<p>Bonjour</p>".into())
+        );
+        let requests = fake.requests.borrow();
+        assert!(
+            requests[0]
+                .1
+                .ends_with("/me/messages/M%2F1/attachments?$select=id,name,contentType,isInline")
+        );
+        assert!(
+            requests[1]
+                .1
+                .ends_with("/me/messages/M%2F1/attachments/A1/$value")
+        );
+        assert!(requests[2].1.ends_with("/me/messages/M%2F1?$select=body"));
+    }
 
     #[test]
     fn reads_senders_recipients_and_delivery_addresses() {
