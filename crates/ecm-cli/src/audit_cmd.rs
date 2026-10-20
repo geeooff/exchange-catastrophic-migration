@@ -130,9 +130,45 @@ fn inventory_graph(work: &Path, args: &GraphArgs) -> Result<(), String> {
         if folder.total == 0 {
             continue;
         }
-        let found = client
+        // Graph pages a folder by offset: a message removed while the folder is
+        // read shifts the next pages, and another slips between two. The ids
+        // are read again until a pass finds none missed; those are read alone.
+        let mut found = client
             .inventory_messages(folder)
             .map_err(|e| e.to_string())?;
+        let mut seen: std::collections::HashSet<String> =
+            found.iter().map(|item| item.key.clone()).collect();
+        if !found.is_empty() {
+            for _ in 0..3 {
+                let missed: Vec<String> = client
+                    .message_ids(folder)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .filter(|id| !seen.contains(id))
+                    .collect();
+                if missed.is_empty() {
+                    break;
+                }
+                eprintln!(
+                    "  outlook.com {}: {} messages missed by the first read",
+                    folder.path,
+                    missed.len()
+                );
+                for id in missed {
+                    match client.inventory_message(&id, folder) {
+                        Ok(item) => {
+                            seen.insert(item.key.clone());
+                            found.push(item);
+                        }
+                        // Deleted or moved since.
+                        Err(ecm_graph::Error::Graph { status: 404, .. }) => {
+                            seen.insert(id);
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+            }
+        }
         eprintln!("  outlook.com {}: {} items", folder.path, found.len());
         items.extend(found);
     }

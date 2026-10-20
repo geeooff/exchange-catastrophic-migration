@@ -55,6 +55,9 @@ const FOLDER_SELECT: &str = "id,displayName,childFolderCount,totalItemCount,unre
 /// `PR_MESSAGE_CLASS`, `PR_MESSAGE_SIZE`, `PR_NATIVE_BODY_INFO`.
 const EXTENDED: &str = "id eq 'String 0x001A' or id eq 'Integer 0x0E08' or id eq 'Integer 0x1016'";
 
+/// What an inventory reads of each message.
+const INVENTORY_SELECT: &str = "id,subject,internetMessageId,from,sentDateTime,receivedDateTime,createdDateTime,isRead,hasAttachments,bodyPreview";
+
 impl<T: Transport> GraphClient<T> {
     /// The id of a well-known folder (`inbox`, `sentitems`, `archive`…), or
     /// `None` when the mailbox has none.
@@ -139,12 +142,37 @@ impl<T: Transport> GraphClient<T> {
             .collect())
     }
 
+    /// The ids of a folder's messages, only, for a quick second look.
+    pub fn message_ids(&self, folder: &GraphFolder) -> Result<Vec<String>> {
+        let url = format!(
+            "/me/mailFolders/{}/messages?$top=1000&$select=id",
+            encode(&folder.id)
+        );
+        Ok(self
+            .get_all(&url)?
+            .iter()
+            .filter_map(|message| message["id"].as_str().map(str::to_owned))
+            .collect())
+    }
+
+    /// One message of a folder, with the properties an audit needs.
+    pub fn inventory_message(&self, id: &str, folder: &GraphFolder) -> Result<ItemRecord> {
+        let message = self.get(&format!(
+            "/me/messages/{}?$select={INVENTORY_SELECT}&$expand={}",
+            encode(id),
+            encode(&format!(
+                "singleValueExtendedProperties($filter={EXTENDED})"
+            ))
+        ))?;
+        record(&message, &folder.path)
+    }
+
     /// Every message of a folder, with the properties an audit needs.
     pub fn inventory_messages(&self, folder: &GraphFolder) -> Result<Vec<ItemRecord>> {
         let url = format!(
             "/me/mailFolders/{}/messages?$top=500&$select={}&$expand={}",
             encode(&folder.id),
-            "id,subject,internetMessageId,from,sentDateTime,receivedDateTime,createdDateTime,isRead,hasAttachments,bodyPreview",
+            INVENTORY_SELECT,
             encode(&format!(
                 "singleValueExtendedProperties($filter={EXTENDED})"
             ))
@@ -459,6 +487,38 @@ fn record(message: &Value, folder: &str) -> Result<ItemRecord> {
 #[cfg(test)]
 mod tests {
     use crate::{GraphClient, testing::FakeTransport};
+
+    #[test]
+    fn reads_a_folders_ids_then_one_message_alone() {
+        let fake = FakeTransport::new([
+            (200, r#"{"value":[{"id":"M1"},{"id":"M2"}]}"#.into()),
+            (
+                200,
+                r#"{"id":"M2","subject":"Impôts","internetMessageId":"<2@x.test>","sentDateTime":"2012-05-05T04:01:18Z","receivedDateTime":"2012-05-05T04:01:20Z","isRead":true}"#.into(),
+            ),
+        ]);
+        let client = GraphClient::new(&fake, "t".into());
+        let folder = super::GraphFolder {
+            id: "F".into(),
+            path: "Inbox".into(),
+            name: "Inbox".into(),
+            total: 2,
+            unread: 0,
+            children: Vec::new(),
+        };
+        assert_eq!(client.message_ids(&folder).unwrap(), ["M1", "M2"]);
+        let item = client.inventory_message("M2", &folder).unwrap();
+        assert_eq!(item.key, "M2");
+        assert_eq!(item.folder, "Inbox");
+        assert_eq!(item.message_id.as_deref(), Some("<2@x.test>"));
+        let requests = fake.requests.borrow();
+        assert!(
+            requests[0]
+                .1
+                .ends_with("/me/mailFolders/F/messages?$top=1000&$select=id")
+        );
+        assert!(requests[1].1.contains("/me/messages/M2?$select="));
+    }
 
     #[test]
     fn reads_file_attachments_raw_and_the_body() {

@@ -49,6 +49,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- An Outlook.com inventory no longer misses messages when a folder changes
+  while it is read (Graph pages by offset, and a removed message makes another
+  slip between two pages): each folder's ids are read again, and the messages
+  missed are read one by one.
 - A file with a Content-ID the HTML body never shows is sent as an attachment,
   not inline: targets hid such files (the PST keeps Content-IDs on many photos).
 - A PST message with no body at all (only attachments, or a `Null` HTML body) is
