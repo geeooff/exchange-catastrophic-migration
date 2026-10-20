@@ -57,7 +57,15 @@ fn for_graph(action: &Action) -> bool {
             | Action::CreateMessage { .. }
             | Action::Attach { .. }
             | Action::Move { .. }
+            | Action::CreateGraph { .. }
+            | Action::SetPhoto { .. }
     )
+}
+
+/// Whether a step writes other item types than messages: the run then asks for
+/// their permissions.
+fn needs_pim_scopes(action: &Action) -> bool {
+    matches!(action, Action::CreateGraph { .. } | Action::SetPhoto { .. })
 }
 
 /// One plan of a run: its steps, journal, done and selected steps.
@@ -121,12 +129,21 @@ pub fn apply_graph_command(
     if runs.iter().all(|run| run.selected.is_empty()) {
         return Ok(());
     }
-    run(runs, graph)
+    let scopes = if runs.iter().any(|run| {
+        run.selected
+            .iter()
+            .any(|&i| needs_pim_scopes(&run.actions[i]))
+    }) {
+        ecm_graph::auth::PIM_WRITE_SCOPES
+    } else {
+        ecm_graph::auth::WRITE_SCOPES
+    };
+    run(runs, graph, scopes)
 }
 
 #[cfg(windows)]
-fn run(runs: Vec<PlanRun>, graph: &GraphArgs) -> Result<(), String> {
-    let mut runner = runner::GraphRunner::new(graph)?;
+fn run(runs: Vec<PlanRun>, graph: &GraphArgs, scopes: &'static str) -> Result<(), String> {
+    let mut runner = runner::GraphRunner::new(graph, scopes)?;
     for plan in runs.into_iter().filter(|run| !run.selected.is_empty()) {
         runner.start(&plan.journal, plan.done)?;
         for (n, &step) in plan.selected.iter().enumerate() {
@@ -157,7 +174,7 @@ fn run(runs: Vec<PlanRun>, graph: &GraphArgs) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn run(_: Vec<PlanRun>, _: &GraphArgs) -> Result<(), String> {
+fn run(_: Vec<PlanRun>, _: &GraphArgs, _: &'static str) -> Result<(), String> {
     Err("Microsoft Graph access needs Windows for now (WinHTTP)".into())
 }
 
@@ -174,8 +191,9 @@ mod runner {
     use ecm_audit::plan::Action;
     use ecm_graph::{GraphClient, WinHttpTransport, auth};
     use ecm_model::path;
+    use serde_json::Value;
 
-    use crate::{audit_cmd::GraphArgs, plan_cmd::JournalLine};
+    use crate::{audit_cmd::GraphArgs, plan_cmd::JournalLine, rules_cmd::FOLDER_PLACEHOLDER};
 
     /// Access tokens last about an hour: renewed before that.
     const RENEW_AFTER: Duration = Duration::from_secs(45 * 60);
@@ -183,10 +201,14 @@ mod runner {
     /// Executes steps against a Graph mailbox and journals them.
     pub struct GraphRunner<'a> {
         args: &'a GraphArgs,
+        scopes: &'static str,
         client: GraphClient<WinHttpTransport>,
         refresh: Option<String>,
         signed_in: Instant,
         folders: HashMap<String, String>,
+        /// Calendars, contact folders and To Do lists by kind and name: `None`
+        /// for the default calendar and contact folder.
+        containers: HashMap<(String, String), Option<String>>,
         journal: Option<fs::File>,
         journal_path: PathBuf,
         done: HashMap<usize, JournalLine>,
@@ -196,26 +218,33 @@ mod runner {
     }
 
     impl<'a> GraphRunner<'a> {
-        pub fn new(args: &'a GraphArgs) -> Result<Self, String> {
+        pub fn new(args: &'a GraphArgs, scopes: &'static str) -> Result<Self, String> {
             let transport = WinHttpTransport::default();
-            let tokens =
-                auth::sign_in_to_write(&transport, &args.client_id, &args.tenant, &mut |prompt| {
+            let tokens = auth::sign_in_with_scopes(
+                &transport,
+                &args.client_id,
+                &args.tenant,
+                scopes,
+                &mut |prompt| {
                     eprintln!();
                     eprintln!(
                         "Sign in to Outlook.com (to apply the plan): open {} and enter the code {}",
                         prompt.verification_uri, prompt.user_code
                     );
                     eprintln!("(Waiting for you to sign in…)");
-                })
-                .map_err(|e| e.to_string())?;
+                },
+            )
+            .map_err(|e| e.to_string())?;
             let client = GraphClient::new(transport, tokens.access);
             let folders = super::graph_folder_map(&client)?.ids;
             Ok(Self {
                 args,
+                scopes,
                 client,
                 refresh: tokens.refresh,
                 signed_in: Instant::now(),
                 folders,
+                containers: HashMap::new(),
                 journal: None,
                 journal_path: PathBuf::new(),
                 done: HashMap::new(),
@@ -258,7 +287,7 @@ mod runner {
                 &self.args.client_id,
                 &self.args.tenant,
                 &refresh,
-                auth::WRITE_SCOPES,
+                self.scopes,
             )
             .map_err(|e| e.to_string())?;
             self.client = GraphClient::new(transport, tokens.access);
@@ -281,6 +310,67 @@ mod runner {
                     f(&self.client).map_err(|e| e.to_string())
                 }
                 other => other.map_err(|e| e.to_string()),
+            }
+        }
+
+        /// The calendar, contact folder or To Do list `name` (created when
+        /// missing), or the default one when `name` is empty: `None` for the
+        /// default calendar and contact folder.
+        fn container(&mut self, kind: &str, name: &str) -> Result<Option<String>, String> {
+            let key = (kind.to_owned(), name.to_owned());
+            if let Some(id) = self.containers.get(&key) {
+                return Ok(id.clone());
+            }
+            let id = match (kind, name.is_empty()) {
+                ("task", true) => Some(
+                    self.call(|client| client.default_todo_list())?
+                        .ok_or("the mailbox has no default To Do list")?,
+                ),
+                (_, true) => None,
+                ("event", false) => Some(self.call(|client| client.ensure_calendar(name))?),
+                ("contact", false) => Some(self.call(|client| client.ensure_contact_folder(name))?),
+                ("task", false) => Some(self.call(|client| client.ensure_todo_list(name))?),
+                (other, _) => return Err(format!("{other} items have no container")),
+            };
+            self.containers.insert(key, id.clone());
+            Ok(id)
+        }
+
+        /// Creates an item from its Graph JSON.
+        fn create(&mut self, kind: &str, to: &str, item: &str) -> Result<String, String> {
+            let mut item: Value =
+                serde_json::from_str(item).map_err(|e| format!("item JSON: {e}"))?;
+            match kind {
+                "event" => {
+                    let calendar = self.container(kind, to)?;
+                    self.call(|client| client.create_event(calendar.as_deref(), &item))
+                }
+                "contact" => {
+                    let folder = self.container(kind, to)?;
+                    self.call(|client| client.create_contact(folder.as_deref(), &item))
+                }
+                "task" => {
+                    let list = self.container(kind, to)?.unwrap_or_default();
+                    self.call(|client| client.create_task(&list, &item))
+                }
+                "rule" => {
+                    for key in ["moveToFolder", "copyToFolder"] {
+                        let Some(path) = item["actions"][key]
+                            .as_str()
+                            .and_then(|v| v.strip_prefix(FOLDER_PLACEHOLDER))
+                        else {
+                            continue;
+                        };
+                        item["actions"][key] = Value::String(self.folder_id(path)?);
+                    }
+                    self.call(|client| client.create_inbox_rule(&item))
+                }
+                "category" => {
+                    let name = item["displayName"].as_str().unwrap_or_default();
+                    let color = item["color"].as_str().unwrap_or("none");
+                    self.call(|client| client.create_category(name, color))
+                }
+                other => Err(format!("unknown item type {other:?}")),
             }
         }
 
@@ -401,6 +491,28 @@ mod runner {
                         }
                     }
                 }
+                Action::CreateGraph { kind, to, item, .. } => self.create(kind, to, item),
+                Action::SetPhoto {
+                    requires,
+                    to,
+                    photo,
+                    ..
+                } => match self.done.get(requires).and_then(|line| line.id.clone()) {
+                    // Its contact was not created: retried with it.
+                    None => Err("skipped".into()),
+                    Some(contact) => {
+                        use base64::Engine as _;
+                        match base64::engine::general_purpose::STANDARD.decode(photo) {
+                            Ok(photo) => self.container("contact", to).and_then(|folder| {
+                                self.call(|client| {
+                                    client.set_contact_photo(folder.as_deref(), &contact, &photo)
+                                })
+                                .map(|()| contact.clone())
+                            }),
+                            Err(error) => Err(error.to_string()),
+                        }
+                    }
+                },
                 other => Err(format!("{} is not a step for Outlook.com", other.kind())),
             };
             self.record(step, result)
@@ -441,6 +553,10 @@ mod tests {
                 r#"{"action":"create-message","to":"Mailings/Viadeo","subject":"x","message":"{}"}"#,
                 "\n",
                 r#"{"action":"attach","requires":1,"name":"a.txt","content_type":"text/plain","data":"eA=="}"#,
+                "\n",
+                r#"{"action":"create-graph","kind":"contact","to":"ecm-test","subject":"Ann","item":"{}"}"#,
+                "\n",
+                r#"{"action":"set-photo","requires":3,"to":"ecm-test","subject":"Ann","photo":"eA=="}"#,
                 "\n"
             ),
         )

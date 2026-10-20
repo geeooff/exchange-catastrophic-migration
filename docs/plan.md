@@ -120,6 +120,7 @@ ecm report-cleanup --work <dir> --domain ...    # sort the old mailbox once a do
 ecm fidelity-test  --ews <url> ...              # property-by-property spike in ecm-test
 ecm fidelity-graph --client-id <id> --pst <file> --keys <file> ...   # the same through Graph
 ecm fidelity-graph-pim --ews <url> --client-id <id>   # other item types, EWS to Graph
+ecm plan-graph-pim | check-graph-pim --ews <url> --client-id <id> [--test]   # copy them, check them
 ```
 
 ## 5. Matching and classification
@@ -242,8 +243,21 @@ Milestone M9b, after messages (M9). Same method: a fidelity test first, then pla
    - contact groups (distribution lists) and safe and blocked senders: no Graph API
      known, to document as limits (the latter stay a setting the user makes).
 5. **Plans and `apply-graph`** for each type, journaled and resumable, and a check
-   comparing each type between the target (Graph) and the source (EWS).
-6. **A full run** of every type into the test containers, then the check.
+   comparing each type between the target (Graph) and the source (EWS):
+   `ecm plan-graph-pim [--test]`, `ecm apply-graph`, `ecm check-graph-pim`. Source
+   items are paired with their copy one to one, the closest first, so that items
+   sharing a subject and start, or an address, each find their own.
+6. **A full run** into the test containers, calendar and contacts (rules and
+   categories stayed at the trial's sample): 426 events and 168 contacts with
+   their photos, all equal to their source. What it showed:
+   - Graph pages events and contacts by offset like messages: the check reads the
+     ids again;
+   - Outlook.com moved 12 of 25 contacts out of their folder when their photo was
+     set, into a folder Graph cannot open: their copies are read by id from the
+     plan's journal (`--plan`), and deleting the test folder does not remove them;
+   - Graph keeps an all-day event as days, in UTC: such events compare by day.
+
+   Left for M9b: series exceptions, tasks and notes (the test source had none).
 
 ## 8. Testing
 

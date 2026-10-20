@@ -113,6 +113,10 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   Test rules go disabled and after the mailbox's own (`sequence`). The EWS master
   category list is the calendar folder's `CategoryList` user configuration (XML,
   base64); Outlook's color index *n* is Graph's `preset`*n*, -1 is `none`.
+- Outlook.com can move a contact into a folder Graph cannot open when its photo is
+  set: list a folder, then read the copies a plan made by the ids in its journal.
+  Graph pages events and contacts by offset too: read the ids again. It gives an
+  all-day event's days as set, in UTC: compare such events by day.
 - A debug build of `ecm` needs more than the 1 MB main thread stack Windows gives:
   `main` runs the command on a 16 MB thread.
 - `GetInboxRules`/`UpdateInboxRules` answer without `ResponseMessages`. Graph returns

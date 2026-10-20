@@ -12,6 +12,7 @@ mod content_cmd;
 mod fidelity_cmd;
 mod graph_cmd;
 mod graph_pim_cmd;
+mod graph_pim_plan_cmd;
 mod graph_plan_cmd;
 mod notes_cmd;
 mod pim_cmd;
@@ -421,9 +422,59 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Run a plan written for an Outlook.com mailbox (`plan-pst --outlook-com`)
-    /// through Microsoft Graph, journaled and resumable like `apply`. Asks for
-    /// `Mail.ReadWrite`.
+    /// Write a plan that copies the calendar, contacts and their photos, tasks,
+    /// inbox rules and categories of an Exchange mailbox into an Outlook.com
+    /// mailbox through Microsoft Graph, leaving out what it already holds; run it
+    /// with `apply-graph`. Events go without their attendees, whom Graph would
+    /// invite. Only reads both mailboxes.
+    PlanGraphPim {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Into test containers: the `ecm-test` calendar, contact folder and To Do
+        /// list, rules disabled and categories named `ecm-test ...`, leaving out
+        /// items whose reminder would ring later.
+        #[arg(long)]
+        test: bool,
+        /// Only this item type. Repeat for several.
+        #[arg(long, value_enum, value_name = "TYPE")]
+        only: Vec<graph_pim_plan_cmd::PimKind>,
+        /// Plan file to write.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+    },
+    /// Compare each calendar item, contact, task, inbox rule and category of an
+    /// Exchange mailbox with its copy in an Outlook.com mailbox, property by
+    /// property, and list those that differ or have no copy. Only reads.
+    CheckGraphPim {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Check the test containers `plan-graph-pim --test` wrote into.
+        #[arg(long)]
+        test: bool,
+        /// Only this item type. Repeat for several.
+        #[arg(long, value_enum, value_name = "TYPE")]
+        only: Vec<graph_pim_plan_cmd::PimKind>,
+        /// A plan `apply-graph` ran: its copies are also read by id, for those
+        /// the server moved out of their container. Repeat for several.
+        #[arg(long = "plan", value_name = "FILE")]
+        plans: Vec<PathBuf>,
+    },
+    /// Run a plan written for an Outlook.com mailbox (`plan-pst --outlook-com`,
+    /// `plan-graph-pim`) through Microsoft Graph, journaled and resumable like
+    /// `apply`. Asks for `Mail.ReadWrite`, and for the other item types'
+    /// `ReadWrite` permissions when the plan has such steps.
     ApplyGraph {
         /// Client id of the Microsoft Graph app registration.
         #[arg(long, value_name = "ID")]
@@ -739,6 +790,32 @@ fn run() -> ExitCode {
                 .as_ref(),
             limit,
             dry_run,
+        )),
+        Command::PlanGraphPim {
+            ews,
+            client_id,
+            tenant,
+            test,
+            only,
+            out,
+        } => report(graph_pim_plan_cmd::plan_graph_pim_command(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            graph_pim_plan_cmd::PimOptions { test, only: &only },
+            &out,
+        )),
+        Command::CheckGraphPim {
+            ews,
+            client_id,
+            tenant,
+            test,
+            only,
+            plans,
+        } => report(graph_pim_plan_cmd::check_graph_pim_command(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            graph_pim_plan_cmd::PimOptions { test, only: &only },
+            &plans,
         )),
         Command::ApplyGraph {
             client_id,

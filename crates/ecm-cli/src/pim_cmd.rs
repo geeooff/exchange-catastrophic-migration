@@ -273,7 +273,7 @@ pub fn plan_pim_command(_: &EwsArgs, _: &GraphArgs, _: &Path) -> Result<(), Stri
 /// Whether two event subjects name the same event: equal, or one holding the
 /// other, once reduced to ASCII letters and digits (a client may have mangled
 /// accents into `?`, or prefixed the organizer's name).
-fn same_subject(a: Option<&str>, b: Option<&str>) -> bool {
+pub(crate) fn same_subject(a: Option<&str>, b: Option<&str>) -> bool {
     let squash = |text: &str| -> String {
         normalize_subject(text)
             .chars()

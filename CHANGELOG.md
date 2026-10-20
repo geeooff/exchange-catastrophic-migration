@@ -56,6 +56,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   would invite, and items whose reminder would ring later are left out. It asks
   for `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite` and
   `MailboxSettings.ReadWrite`; `--dry-run` only prints what it would create.
+- `plan-graph-pim`: a plan that copies the calendar, contacts and their photos,
+  tasks, inbox rules and categories of an Exchange mailbox into an Outlook.com
+  mailbox, leaving out what it already holds (events by start and subject,
+  contacts by address or name, tasks by title and due date, rules and categories
+  by name). Rules keep their folders by path, created when missing, and go after
+  the mailbox's own rules. `--test` writes into the `ecm-test` containers instead,
+  rules disabled and names prefixed; `--only TYPE` keeps one type. Each item is a
+  `create-graph` step, each photo a `set-photo` step that `apply-graph` runs after
+  its contact; `apply-graph` then asks for the other item types' `ReadWrite`
+  permissions.
+- `check-graph-pim`: compare each of those source items with its copy, property
+  by property, and list the copies that differ and the items that have none.
+  Each source item is paired with one copy, the closest first. `--plan FILE`
+  also reads, by the ids in its journal, the copies the server moved out of
+  their container: Outlook.com can move a contact when its photo is set.
 - A PST message over 25 MB is created without its files, then given them one
   request each (plan step `attach`): an Exchange server refuses too large a
   request (HTTP 413).
@@ -64,6 +79,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 - A debug build no longer overflows its stack while reading its arguments: `ecm`
   runs its command on a thread with a larger stack.
+- Events and contacts read from Outlook.com are read again by id, like
+  messages: Graph pages them by offset, and one changed during the read slips
+  between two pages.
 - An Outlook.com inventory no longer misses messages when a folder changes
   while it is read (Graph pages by offset, and a removed message makes another
   slip between two pages): each folder's ids are read again, and the messages

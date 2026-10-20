@@ -190,9 +190,8 @@ impl<T: Transport> GraphClient<T> {
     /// The id of the element of `collection` whose `field` is `name`, created
     /// when missing.
     fn ensure_named(&self, collection: &str, field: &str, name: &str) -> Result<String> {
-        let found = self.get_all(&format!("{collection}?$top=100"))?;
-        if let Some(existing) = found.iter().find(|e| e[field].as_str() == Some(name)) {
-            return Self::id_of(existing);
+        if let Some(id) = self.find_named(collection, field, name)? {
+            return Ok(id);
         }
         Self::id_of(&self.send_json("POST", collection, &json!({ field: name }))?)
     }
@@ -212,39 +211,50 @@ impl<T: Transport> GraphClient<T> {
         self.ensure_named("/me/todo/lists", "displayName", name)
     }
 
-    /// Creates an event in a calendar. An event without attendees sends no
-    /// invitation; with attendees, Graph would send them one.
-    pub fn create_event(&self, calendar_id: &str, event: &Value) -> Result<String> {
-        Self::id_of(&self.send_json(
-            "POST",
-            &format!("/me/calendars/{}/events", encode(calendar_id)),
-            event,
-        )?)
+    /// Creates an event in a calendar, the default one when `None`. An event
+    /// without attendees sends no invitation; with attendees, Graph would send
+    /// them one.
+    pub fn create_event(&self, calendar_id: Option<&str>, event: &Value) -> Result<String> {
+        let url = match calendar_id {
+            Some(id) => format!("/me/calendars/{}/events", encode(id)),
+            None => "/me/events".to_owned(),
+        };
+        Self::id_of(&self.send_json("POST", &url, event)?)
     }
 
-    /// Creates a contact in a contact folder.
-    pub fn create_contact(&self, folder_id: &str, contact: &Value) -> Result<String> {
-        Self::id_of(&self.send_json(
-            "POST",
-            &format!("/me/contactFolders/{}/contacts", encode(folder_id)),
-            contact,
-        )?)
+    /// Creates a contact in a contact folder, the default one when `None`.
+    pub fn create_contact(&self, folder_id: Option<&str>, contact: &Value) -> Result<String> {
+        let url = match folder_id {
+            Some(id) => format!("/me/contactFolders/{}/contacts", encode(id)),
+            None => "/me/contacts".to_owned(),
+        };
+        Self::id_of(&self.send_json("POST", &url, contact)?)
     }
 
-    /// Sets the photo (JPEG or PNG bytes) of a contact of a contact folder.
-    pub fn set_contact_photo(&self, folder_id: &str, contact_id: &str, photo: &[u8]) -> Result<()> {
+    /// Sets the photo (JPEG or PNG bytes) of a contact of a contact folder, the
+    /// default one when `None`.
+    pub fn set_contact_photo(
+        &self,
+        folder_id: Option<&str>,
+        contact_id: &str,
+        photo: &[u8],
+    ) -> Result<()> {
         let content_type = if photo.starts_with(b"\x89PNG") {
             "image/png"
         } else {
             "image/jpeg"
         };
-        self.request(
-            "PUT",
-            &format!(
+        let url = match folder_id {
+            Some(folder) => format!(
                 "/me/contactFolders/{}/contacts/{}/photo/$value",
-                encode(folder_id),
+                encode(folder),
                 encode(contact_id)
             ),
+            None => format!("/me/contacts/{}/photo/$value", encode(contact_id)),
+        };
+        self.request(
+            "PUT",
+            &url,
             "application/json",
             Some(content_type),
             photo,
@@ -439,17 +449,19 @@ mod tests {
         assert_eq!(client.ensure_contact_folder("ecm-test").unwrap(), "F1");
         assert_eq!(client.ensure_todo_list("ecm-test").unwrap(), "L1");
         assert_eq!(
-            client.create_event("C1", &json!({"subject": "x"})).unwrap(),
+            client
+                .create_event(Some("C1"), &json!({"subject": "x"}))
+                .unwrap(),
             "E1"
         );
         assert_eq!(
             client
-                .create_contact("F1", &json!({"displayName": "Ann"}))
+                .create_contact(Some("F1"), &json!({"displayName": "Ann"}))
                 .unwrap(),
             "P1"
         );
         client
-            .set_contact_photo("F1", "P1", b"\xff\xd8jpeg")
+            .set_contact_photo(Some("F1"), "P1", b"\xff\xd8jpeg")
             .unwrap();
         assert_eq!(
             client.create_task("L1", &json!({"title": "t"})).unwrap(),
