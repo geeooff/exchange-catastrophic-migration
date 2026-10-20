@@ -96,6 +96,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - `plan-pst` no longer creates folders nothing goes into: the quarantine folder
   when it replaces nothing, or, with `--replacements-only`, the folders of the
   messages it leaves out.
+- `plan --after` no longer re-creates a message next to the copy an earlier plan
+  created. The audit gave that copy to a twin of the message (the same message
+  kept in Recoverable Items, or filed in another folder), so the message looked
+  missing. Copies now go first to the messages plans rebuild, then, between
+  equal shares, to the message in their own folder.
+- `plan --after` also replaces the copies earlier plans re-created from
+  Outlook.com when they are degraded (re-created, then quarantined, unless
+  another copy would stay next to the new one), and quarantines the extra copies
+  they made of a message. Healthy copies stay, copies rebuilt from a PST are left
+  to `plan-pst`, and copies `ecm` did not put there are never touched.
 
 ## [0.1.0] - 2026-10-19
 

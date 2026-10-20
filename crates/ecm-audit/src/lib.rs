@@ -230,16 +230,26 @@ pub fn audit(source: &[ItemRecord], target: &[ItemRecord], cutoff: i64) -> Audit
 
     // Distributes target copies over the source items sharing their key: each
     // source item gets its share, in order, so that a message filed twice in the
-    // source keeps two copies.
+    // source keeps two copies. Items plans rebuild come first, so that a twin in
+    // a system folder (Recoverable Items) never takes their copy; then, between
+    // equal shares, the item in the copy's folder. Otherwise a plan would re-create
+    // an item next to its own copy.
     let assign = |sources: &[usize],
                   copy: usize,
                   by_fingerprint: bool,
                   candidates: &mut Vec<Vec<(usize, bool)>>| {
-        let source = *sources
+        let folder = target[copy].folder.to_lowercase();
+        let chosen = *sources
             .iter()
-            .min_by_key(|&&s| candidates[s].len())
+            .min_by_key(|&&s| {
+                (
+                    !verify::in_scope(&source[s]),
+                    candidates[s].len(),
+                    source[s].folder.to_lowercase() != folder,
+                )
+            })
             .expect("keys always have a source item");
-        candidates[source].push((copy, by_fingerprint));
+        candidates[chosen].push((copy, by_fingerprint));
     };
     for (copy, item) in target.iter().enumerate() {
         if let Some(sources) = message_key(item).and_then(|id| by_id.get(id.as_str())) {
@@ -418,6 +428,50 @@ mod tests {
         let audit = audit(&source, &target, CUTOFF);
         assert_eq!(audit.source_copies, [1, 1]);
         assert_eq!(audit.duplicates(), 0);
+    }
+
+    #[test]
+    fn a_system_folder_twin_does_not_take_the_copy_of_a_rebuilt_item() {
+        // Sent twice, and kept once more in Recoverable Items: the two copies are
+        // the two sent items'.
+        let source = vec![
+            message(
+                "kept",
+                &ecm_model::path::join("Recoverable Items", "Purges"),
+                "<1>",
+                100,
+            ),
+            message("s1", "Sent Items", "<1>", 100),
+            message("s2", "Sent Items", "<1>", 100),
+        ];
+        let target = vec![
+            message("t1", "Sent Items", "<1>", 100),
+            message("t2", "Sent Items", "<1>", 100),
+        ];
+        let audit = audit(&source, &target, CUTOFF);
+        assert_eq!(audit.source_copies, [0, 1, 1]);
+        assert_eq!(
+            audit.source_status[1..],
+            [SourceStatus::Ok, SourceStatus::Ok]
+        );
+
+        // Migration debris at the top goes to a rebuilt item too.
+        let audit = super::audit(&source, &[message("t1", "", "<1>", 100)], CUTOFF);
+        assert_eq!(audit.source_copies, [0, 1, 0]);
+    }
+
+    #[test]
+    fn between_equal_shares_a_copy_goes_to_the_item_in_its_folder() {
+        // Sent to oneself: in the inbox and in sent items.
+        let source = vec![
+            message("s1", "Inbox", "<1>", 100),
+            message("s2", "Sent Items", "<1>", 100),
+        ];
+        let audit = audit(&source, &[message("t1", "Sent Items", "<1>", 100)], CUTOFF);
+        assert_eq!(
+            audit.source_status,
+            [SourceStatus::Missing, SourceStatus::Ok]
+        );
     }
 
     #[test]
