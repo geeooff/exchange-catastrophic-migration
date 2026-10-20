@@ -10,7 +10,7 @@ to what can be migrated. Milestones: [plan.md](plan.md#7-milestones).
 | | As a source | As a target |
 |---|---|---|
 | **PST** (Outlook data file) | ✅ read-only[^1] | ✗ never |
-| **EWS** (Exchange on-premises or hosted) | ⏳ M7 | ✅ |
+| **EWS** (Exchange on-premises or hosted) | ⏳ M7, trials only[^18] | ✅ |
 | **Graph** (Outlook.com, Microsoft 365)[^2] | ✅ | ✅ messages; ⏳ M9b the rest |
 
 ## Matrix
@@ -42,7 +42,7 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 | Inventory | ✅ `ecm inventory --pst` | ✅ `ecm inventory --outlook-com` | ✅ `ecm inventory --ews` |
 | Audit, verify | ✅ `ecm audit`, `ecm verify` | ✅ `ecm audit --source outlook` | ⏳ M7 |
 | Bodies and files against the PST | — | ✅ `ecm check-content --outlook-com` | ✅ `ecm check-content --ews` |
-| Trial in `ecm-test` | — | ✅ `ecm fidelity-graph` | ✅ `ecm fidelity-test` |
+| Trial in `ecm-test` | — | ✅ `ecm fidelity-graph`, `ecm fidelity-graph-pim`[^18] | ✅ `ecm fidelity-test` |
 
 [^1]: Opened read-only, checksum checked before and after.
 [^2]: Tested on Outlook.com with personal Microsoft accounts. Microsoft 365 uses the
@@ -66,3 +66,5 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 [^15]: Client-only rules come without conditions or actions: recreate them by hand.
 [^16]: If Graph allows it: no API known.
 [^17]: Neither EWS nor Graph exposes them: set them in the web client.
+[^18]: Calendar, contacts and photos, tasks, inbox rules and categories, from EWS.
+    Events go without their attendees: Graph would invite them.

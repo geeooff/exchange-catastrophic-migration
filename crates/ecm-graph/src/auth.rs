@@ -21,6 +21,11 @@ pub const LONG_RUN_SCOPES: &str =
 /// token for long runs.
 pub const WRITE_SCOPES: &str = "Mail.ReadWrite User.Read offline_access";
 
+/// Permissions asked for to write every item type: messages and notes, the
+/// calendar, contacts, To Do tasks, inbox rules and categories (mailbox
+/// settings), with a refresh token for long runs.
+pub const PIM_WRITE_SCOPES: &str = "Mail.ReadWrite Calendars.ReadWrite Contacts.ReadWrite Tasks.ReadWrite MailboxSettings.ReadWrite User.Read offline_access";
+
 /// Tokens from a sign-in. Kept in memory only, never written or logged.
 pub struct Tokens {
     /// Bearer token for Graph requests.
@@ -101,14 +106,20 @@ pub fn sign_in_to_write<T: Transport>(
     tenant: &str,
     prompt: &mut dyn FnMut(&DeviceCodePrompt),
 ) -> Result<Tokens> {
-    sign_in_with_sleep(
-        transport,
-        client_id,
-        tenant,
-        WRITE_SCOPES,
-        prompt,
-        thread::sleep,
-    )
+    sign_in_with_scopes(transport, client_id, tenant, WRITE_SCOPES, prompt)
+}
+
+/// Signs in asking for `scopes` (such as [`PIM_WRITE_SCOPES`]); with
+/// `offline_access` among them, the tokens can be renewed with
+/// [`refresh_with`] and the same scopes.
+pub fn sign_in_with_scopes<T: Transport>(
+    transport: &T,
+    client_id: &str,
+    tenant: &str,
+    scopes: &str,
+    prompt: &mut dyn FnMut(&DeviceCodePrompt),
+) -> Result<Tokens> {
+    sign_in_with_sleep(transport, client_id, tenant, scopes, prompt, thread::sleep)
 }
 
 /// Gets new tokens from a refresh token, without the user.

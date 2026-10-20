@@ -46,12 +46,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   Outlook.com mailbox through Graph, from MIME and from JSON with the properties
   only creation sets, and compare each copy with a known good one and the PST's
   files. It asks for `Mail.ReadWrite`.
+- `fidelity-graph-pim`: copy a few calendar items, contacts (with their photo),
+  tasks, inbox rules and categories of an Exchange mailbox into an Outlook.com
+  mailbox through Graph, read each copy back and compare it with its source,
+  property by property. The items are picked so that together they show every
+  property the source has. It only creates: in an `ecm-test` calendar, contact
+  folder and To Do list, and rules (disabled, after the mailbox's own) and
+  categories named `ecm-test …`. Events go without their attendees, whom Graph
+  would invite, and items whose reminder would ring later are left out. It asks
+  for `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite` and
+  `MailboxSettings.ReadWrite`; `--dry-run` only prints what it would create.
 - A PST message over 25 MB is created without its files, then given them one
   request each (plan step `attach`): an Exchange server refuses too large a
   request (HTTP 413).
 
 ### Fixed
 
+- A debug build no longer overflows its stack while reading its arguments: `ecm`
+  runs its command on a thread with a larger stack.
 - An Outlook.com inventory no longer misses messages when a folder changes
   while it is read (Graph pages by offset, and a removed message makes another
   slip between two pages): each folder's ids are read again, and the messages

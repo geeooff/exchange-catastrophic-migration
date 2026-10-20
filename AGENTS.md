@@ -2,9 +2,11 @@
 
 `ecm`: Rust CLI that audits and repairs an Exchange mailbox after a botched
 migration. Sources (read-only): a PST file, and an Outlook.com mailbox through
-Microsoft Graph; Exchange over EWS as a source is planned (M7). Target: Exchange over
-EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan.md)
-(milestones M0–M8, mark ✅ when done). Releases: [CHANGELOG.md](CHANGELOG.md).
+Microsoft Graph; Exchange over EWS as a source is planned (M7). Targets: Exchange over
+EWS, and Outlook.com through Graph (messages; other types M9b). Public repo: no
+personal data. Roadmap and design: [docs/plan.md](docs/plan.md) (milestones, mark ✅
+when done). What can be migrated: [docs/supported-migrations.md](docs/supported-migrations.md).
+Releases: [CHANGELOG.md](CHANGELOG.md).
 
 ## Layout
 
@@ -13,10 +15,11 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   its rebuilding as MIME.
 - `ecm-http`: WinHTTP + NTLM/Negotiate, Credential Manager. Only crate with `unsafe`.
 - `ecm-ews`: hand-written SOAP + `quick-xml` tree: folders, items, export (backup),
-  details, calendar and contact listings; every change in `write`.
+  details, calendar items, contacts and tasks (listings and whole items), the
+  category list; every change in `write`.
 - `ecm-graph`: Microsoft Graph (Outlook.com): device code sign-in, mail, calendar,
-  contacts, To Do, inbox rules as a source; as a target (M9, in progress), every
-  change in `write`.
+  contacts, To Do, inbox rules, categories as a source; as a target (messages M9,
+  the other types M9b in progress), every change in `write`.
 - `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching, defects, plans,
   verification.
 - `ecm-cli`: the `ecm` binary, one module per command family.
@@ -29,8 +32,10 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
 - On a target: no hard delete (quarantine instead), and changes only through
   `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
   folders leave only through `plan-discard`, into Deleted Items: the user empties
-  it. The single exception is `ecm fidelity-test`, which only creates items, only
-  in the `ecm-test` folder.
+  it. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
+  `ecm fidelity-graph-pim`, which only create items, only in `ecm-test` containers
+  (and rules, disabled, and categories named `ecm-test …`), each run with the user's
+  go-ahead.
 - Plans only move items `ecm` put where they are: migration debris at the top of the
   target mailbox, and items an applied plan moved (`--after`, `plan-park`).
 - Never track mailbox data or private notes. Exceptions: fixtures under
@@ -99,7 +104,17 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   ids again.
 - EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
   in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
-  each Graph event again with `Prefer: outlook.timezone` in its own zone.
+  each Graph event again with `Prefer: outlook.timezone` in its own zone. The other
+  way, Exchange 2016+ `AllProperties` gives `StartWallClock` and `StartTimeZoneId`
+  (UTC can be `tzone://Microsoft/Utc`): Graph takes them as is.
+- Graph as a target for other types: an event created with attendees invites them,
+  so they are left out. A contact photo is `PUT` on
+  `/contactFolders/{id}/contacts/{id}/photo/$value` and comes back byte for byte.
+  Test rules go disabled and after the mailbox's own (`sequence`). The EWS master
+  category list is the calendar folder's `CategoryList` user configuration (XML,
+  base64); Outlook's color index *n* is Graph's `preset`*n*, -1 is `none`.
+- A debug build of `ecm` needs more than the 1 MB main thread stack Windows gives:
+  `main` runs the command on a 16 MB thread.
 - `GetInboxRules`/`UpdateInboxRules` answer without `ResponseMessages`. Graph returns
   client-only Outlook rules (alerts) with `actions` and `conditions` null.
 - The migration also mangled sent dates (day and month swapped, seconds lost, hours

@@ -119,6 +119,7 @@ ecm check-content  --ews <url> | --outlook-com --client-id <id> --pst <file> ...
 ecm report-cleanup --work <dir> --domain ...    # sort the old mailbox once a domain moved
 ecm fidelity-test  --ews <url> ...              # property-by-property spike in ecm-test
 ecm fidelity-graph --client-id <id> --pst <file> --keys <file> ...   # the same through Graph
+ecm fidelity-graph-pim --ews <url> --client-id <id>   # other item types, EWS to Graph
 ```
 
 ## 5. Matching and classification
@@ -220,13 +221,22 @@ Milestone M9b, after messages (M9). Same method: a fidelity test first, then pla
    and a To Do list named `ecm-test`, rules created disabled and categories, both with
    an `ecm-test` prefix. Nothing else in the mailbox is touched; the user deletes them
    at the end.
-4. **Fidelity test** per type: a few items created, read back and compared property by
-   property with the source. Open questions:
-   - events with attendees: whether Graph sends invitations when it creates them (it
-     must not), time zones, recurrences and their exceptions, reminders;
-   - contacts: every field, the photo (`PUT /contacts/{id}/photo/$value`);
-   - To Do tasks: due date, reminder, recurrence, completion, notes;
-   - inbox rules (`messageRules`): conditions, actions, folders by id;
+4. **Fidelity test** per type (`ecm fidelity-graph-pim`): a few items created, read
+   back and compared property by property with the source. Run on a real mailbox
+   (Exchange 2019 to Outlook.com): 6 events, 8 contacts, 3 inbox rules and 5
+   categories, every compared property equal. What it showed:
+   - events: Graph sends invitations to the attendees of an event it creates, so
+     attendees are left out. Exchange 2016 and later give each time in the item's
+     own zone (`StartWallClock`, `StartTimeZoneId`), which Graph takes as is: times
+     in 4 zones, yearly and weekly series and all-day events came back equal. The
+     source had no series exceptions: still to test. Items whose reminder would
+     ring later are left out of the trial;
+   - contacts: every field Graph has, the photo byte for byte
+     (`PUT /contactFolders/{id}/contacts/{id}/photo/$value`, personal accounts
+     included). Phone numbers Graph has no field for (fax, pager…) are listed;
+   - inbox rules: conditions, actions, folders found by path in the target;
+   - categories: name and color (Outlook's index *n* is Graph's `preset`*n*);
+   - To Do tasks and notes: the source had none; still to test;
    - notes (`IPM.StickyNote`): no known Graph API; try a message of that class in
      the Notes folder, else document the limit;
    - contact groups (distribution lists) and safe and blocked senders: no Graph API

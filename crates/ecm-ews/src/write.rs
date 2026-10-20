@@ -42,14 +42,24 @@ pub struct RuleBrief {
 }
 
 impl<T: Transport> EwsClient<T> {
-    /// The mailbox's inbox rules with what matters to check them. Only reads.
-    pub fn inbox_rules(&self) -> Result<Vec<RuleBrief>> {
+    /// The mailbox's inbox rules, whole (`<t:Rule>` elements), in order. Only
+    /// reads.
+    pub fn inbox_rule_elements(&self) -> Result<Vec<crate::xml::Element>> {
         let message = self
             .call("<m:GetInboxRules/>")?
             .into_iter()
             .next()
             .ok_or_else(|| Error::MalformedResponse("GetInboxRules returned no message".into()))?
             .into_result()?;
+        Ok(message
+            .element
+            .child("InboxRules")
+            .map(|rules| rules.children.clone())
+            .unwrap_or_default())
+    }
+
+    /// The mailbox's inbox rules with what matters to check them. Only reads.
+    pub fn inbox_rules(&self) -> Result<Vec<RuleBrief>> {
         let flag = |rule: &crate::xml::Element, name: &str| {
             rule.child_text(name)
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
@@ -59,34 +69,28 @@ impl<T: Transport> EwsClient<T> {
                 .and_then(|id| id.attribute("Id"))
                 .map(str::to_owned)
         };
-        Ok(message
-            .element
-            .child("InboxRules")
-            .map(|rules| {
-                rules
-                    .children
-                    .iter()
-                    .map(|rule| RuleBrief {
-                        name: rule
-                            .child_text("DisplayName")
-                            .unwrap_or_default()
-                            .trim()
-                            .to_owned(),
-                        priority: rule
-                            .child_text("Priority")
-                            .and_then(|p| p.trim().parse().ok()),
-                        enabled: flag(rule, "IsEnabled"),
-                        in_error: flag(rule, "IsInError"),
-                        not_supported: flag(rule, "IsNotSupported"),
-                        move_to: folder(rule, "MoveToFolder"),
-                        copy_to: folder(rule, "CopyToFolder"),
-                        stops: rule
-                            .path(&["Actions", "StopProcessingRules"])
-                            .is_some_and(|v| v.text.trim().eq_ignore_ascii_case("true")),
-                    })
-                    .collect()
+        Ok(self
+            .inbox_rule_elements()?
+            .iter()
+            .map(|rule| RuleBrief {
+                name: rule
+                    .child_text("DisplayName")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+                priority: rule
+                    .child_text("Priority")
+                    .and_then(|p| p.trim().parse().ok()),
+                enabled: flag(rule, "IsEnabled"),
+                in_error: flag(rule, "IsInError"),
+                not_supported: flag(rule, "IsNotSupported"),
+                move_to: folder(rule, "MoveToFolder"),
+                copy_to: folder(rule, "CopyToFolder"),
+                stops: rule
+                    .path(&["Actions", "StopProcessingRules"])
+                    .is_some_and(|v| v.text.trim().eq_ignore_ascii_case("true")),
             })
-            .unwrap_or_default())
+            .collect())
     }
 
     /// Returns the id of the mail folder `name` directly under the top of the
@@ -337,24 +341,12 @@ impl<T: Transport> EwsClient<T> {
 
     /// Display names of the mailbox's inbox rules (`GetInboxRules`). Only reads.
     pub fn inbox_rule_names(&self) -> Result<Vec<String>> {
-        let message = self
-            .call("<m:GetInboxRules/>")?
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::MalformedResponse("GetInboxRules returned no message".into()))?
-            .into_result()?;
-        Ok(message
-            .element
-            .child("InboxRules")
-            .map(|rules| {
-                rules
-                    .children
-                    .iter()
-                    .filter_map(|rule| rule.child_text("DisplayName"))
-                    .map(|name| name.trim().to_owned())
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(self
+            .inbox_rule_elements()?
+            .iter()
+            .filter_map(|rule| rule.child_text("DisplayName"))
+            .map(|name| name.trim().to_owned())
+            .collect())
     }
 
     /// Creates an inbox rule from its EWS XML (`<t:Rule>`), with
