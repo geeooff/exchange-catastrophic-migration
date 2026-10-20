@@ -6,6 +6,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
+Microsoft Graph as a target. An Outlook.com mailbox was repaired from a PST, and
+its 8,665 messages were checked against it. Calendar items, contacts and their
+photos, inbox rules and categories were copied from an Exchange mailbox into its
+test containers: 426 events and 168 contacts, all equal to their source. Copies
+are now checked body and attachment by attachment against a PST, bodies kept
+only as compressed RTF are recovered, and messages too large for one request go
+one file at a time. What can be migrated, from which source to which target, is
+in [docs/supported-migrations.md](docs/supported-migrations.md).
+
 ### Added
 
 - [docs/supported-migrations.md](docs/supported-migrations.md): what can be
@@ -143,4 +154,6 @@ senders and mangled dates.
 - `fidelity-test`: re-create a few items in an `ecm-test` folder and compare them
   property by property with their reference.
 
+[Unreleased]: https://github.com/geeooff/exchange-catastrophic-migration/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/geeooff/exchange-catastrophic-migration/releases/tag/v0.2.0
 [0.1.0]: https://github.com/geeooff/exchange-catastrophic-migration/releases/tag/v0.1.0

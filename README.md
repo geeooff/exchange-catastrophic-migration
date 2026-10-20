@@ -8,13 +8,14 @@ web client cannot see, duplicates everywhere. This tool compares the mailbox wit
 trusted source, tells you exactly what is wrong, and repairs it without touching what
 arrived after the migration.
 
-> **Status: 0.1, used on a real mailbox.** It repaired a mailbox of
+> **Status: 0.2, used on real mailboxes.** It repaired an Exchange mailbox of
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
-> corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
-> An Outlook.com mailbox as a target, through Microsoft Graph, repaired a real
-> mailbox's messages; the other item types are being validated
-> (`ecm fidelity-graph-pim`). What can be migrated,
-> from which source to which target: [docs/supported-migrations.md](docs/supported-migrations.md).
+> corrupted attachments, lost senders and mangled dates, then checked every copy
+> against two PSTs. Through Microsoft Graph, it repaired an Outlook.com mailbox's
+> messages and copied calendar items, contacts, rules and categories into it; tasks,
+> notes and series exceptions are still to validate. See [docs/plan.md](docs/plan.md).
+> What can be migrated, from which source to which target:
+> [docs/supported-migrations.md](docs/supported-migrations.md).
 
 ## How it works
 
