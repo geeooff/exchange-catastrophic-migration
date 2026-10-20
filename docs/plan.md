@@ -158,7 +158,9 @@ missing from a source, and quarantine duplicates and the damaged copies they
 replace. Nothing is fixed in place: properties a migration got wrong are often the
 ones that can only be set at creation. A first pass also showed that migration
 copies which look healthy can still be damaged, so a second pass (`plan --after`)
-re-creates every migration copy the first one kept.
+re-creates every migration copy the first one kept. The copies a plan re-created
+are trusted while healthy: a degraded one is re-created and quarantined, an extra
+one quarantined.
 
 Actions (JSON Lines, one per step, `requires` naming the step that must succeed
 first): `create-folder`; `recreate` (MIME fetched from Outlook.com at apply time);

@@ -20,7 +20,8 @@ description: Plan and apply the repair of the target mailbox (`ecm plan` then `e
 6. After `apply`: `ecm verify --ews <url> --work reports --cutoff <date>` (only reads)
    inventories the target again into `target.after.jsonl` and checks the live
    folders. Inspect a suspicious item with `ecm target show --id <id> --attachments`.
-7. A second pass replaces the migration copies the first plan moved into folders:
+7. A second pass replaces the migration copies the first plan moved into folders,
+   and the copies it re-created that are degraded (extra ones are quarantined):
    `ecm plan … --after reports/plan.jsonl --out reports/plan2.jsonl`, with the
    after-inventory as `target.jsonl` in its work directory.
 8. Calendar, contacts and To Do tasks have no MIME in Graph: `ecm plan-pim --ews <url> --client-id <id> --out reports/plan-pim.jsonl`

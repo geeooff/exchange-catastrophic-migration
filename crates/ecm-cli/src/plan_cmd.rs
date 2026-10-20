@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ecm_audit::plan::{Action, FolderMap, WELL_KNOWN, counts, plan};
+use ecm_audit::plan::{Action, Applied, FolderMap, WELL_KNOWN, counts, plan};
 use ecm_ews::write::ExtendedValue;
 use ecm_model::{
     item::{format_iso, format_utc, parse_utc},
@@ -46,9 +46,17 @@ pub fn plan_command(
         .into_iter()
         .filter(|item| !ecm_audit::verify::is_parked(&item.folder))
         .collect();
-    let mut moved = HashSet::new();
+    let mut applied = Applied::default();
     for plan in after {
-        moved.extend(moved_items(plan)?);
+        applied.moved.extend(moved_items(plan)?);
+        // Only copies re-created from Outlook.com, this plan's source: those
+        // rebuilt from a PST are `plan-pst`'s.
+        applied.created.extend(
+            created_items(plan)?
+                .into_iter()
+                .filter(|(_, from_pst)| !from_pst)
+                .map(|(id, _)| id),
+        );
     }
 
     let client = connect(ews)?;
@@ -62,7 +70,9 @@ pub fn plan_command(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let run = format_utc(now).replace([' ', ':'], "-");
-    let actions = plan(&audit, &source, &target, &folders, &existing, &moved, &run);
+    let actions = plan(
+        &audit, &source, &target, &folders, &existing, &applied, &run,
+    );
 
     let mut text = String::new();
     for action in &actions {

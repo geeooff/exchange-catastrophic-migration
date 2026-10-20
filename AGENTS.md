@@ -37,7 +37,8 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   (and rules, disabled, and categories named `ecm-test …`), each run with the user's
   go-ahead.
 - Plans only move items `ecm` put where they are: migration debris at the top of the
-  target mailbox, and items an applied plan moved (`--after`, `plan-park`).
+  target mailbox, and items an applied plan moved or created (`--after`,
+  `plan-park`).
 - Never track mailbox data or private notes. Exceptions: fixtures under
   `crates/*/tests/fixtures/`, each named in that folder's `README.md`. Private notes and
   config go in `*.local.*` files, which are gitignored.

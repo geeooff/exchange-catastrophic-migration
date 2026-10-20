@@ -262,26 +262,37 @@ pub fn counts(actions: &[Action]) -> Vec<(&'static str, usize)> {
     counts
 }
 
+/// Target items earlier applied plans put where they are, by id (from their
+/// journals).
+#[derive(Debug, Clone, Default)]
+pub struct Applied {
+    /// Migration copies a plan moved into folders. They are never trusted, even
+    /// when their properties look right (bodies emptied, attachments with every
+    /// LF turned into CRLF): each is re-created from its source item, then
+    /// quarantined.
+    pub moved: HashSet<String>,
+    /// Copies a plan created from the same source. Trusted while healthy; a
+    /// degraded one is re-created from its source item, then quarantined, unless
+    /// another copy would stay next to the new one; an extra one is quarantined.
+    pub created: HashSet<String>,
+}
+
 /// Builds the plan for an audit of `target` against `source`.
 ///
 /// `existing` holds the target's folder paths. `run` names the quarantine
 /// sub-folder. Only messages are re-created: other source items are left out.
 ///
 /// Only target items at the top of the mailbox, where the migration left its
-/// copies, are moved. Items in any other folder were delivered or filed there
-/// and are left alone, and so are the source items they serve.
-///
-/// `replace` holds migration copies an earlier `apply` moved into folders (their
-/// ids, from its journal). They are never trusted, even when their properties
-/// look right (bodies emptied, attachments with every LF turned into CRLF): each
-/// is re-created from its source item, then quarantined.
+/// copies, and items earlier plans put where they are (`applied`) are moved.
+/// Items in any other folder were delivered or filed there and are left alone,
+/// and so are the source items they serve.
 pub fn plan(
     audit: &Audit,
     source: &[ItemRecord],
     target: &[ItemRecord],
     folders: &FolderMap,
     existing: &BTreeSet<String>,
-    replace: &HashSet<String>,
+    applied: &Applied,
     run: &str,
 ) -> Vec<Action> {
     let quarantine = path::join(&path::join("", QUARANTINE_FOLDER), run);
@@ -298,10 +309,22 @@ pub fn plan(
     let mut needed: BTreeSet<String> = BTreeSet::new();
     let mut recreate = Vec::new();
     let mut moves = Vec::new();
-    // Items a plan may move: migration debris at the top, and migration copies an
-    // earlier `apply` moved, never mail filed by the user.
-    let to_replace = |copy: usize| replace.contains(target[copy].key.as_str());
+    // Items a plan may move: migration debris at the top, migration copies an
+    // earlier `apply` moved, and copies it created, never mail filed by the user.
+    let to_replace = |copy: usize| applied.moved.contains(target[copy].key.as_str());
+    let created = |copy: usize| applied.created.contains(target[copy].key.as_str());
     let at_top = |copy: usize| target[copy].folder.is_empty() || to_replace(copy);
+    // Source items with an extra copy no plan may move: replacing the copy an
+    // earlier plan created would leave that one next to the new one.
+    let mut kept: HashSet<usize> = HashSet::new();
+    for (index, role) in audit.target_roles.iter().enumerate() {
+        if let TargetRole::Duplicate { source: s } = role
+            && !at_top(index)
+            && !created(index)
+        {
+            kept.insert(*s);
+        }
+    }
     for (s, (item, status)) in source.iter().zip(&audit.source_status).enumerate() {
         let skipped_folder = path::split(&item.folder)
             .first()
@@ -309,7 +332,10 @@ pub fn plan(
         if !item.is_message() || skipped_folder {
             continue;
         }
-        if copy_of.get(&s).is_some_and(|&copy| !at_top(copy)) {
+        let movable = |copy: usize| {
+            at_top(copy) || created(copy) && *status == SourceStatus::Degraded && !kept.contains(&s)
+        };
+        if copy_of.get(&s).is_some_and(|&copy| !movable(copy)) {
             continue;
         }
         let to = folders.target(&item.folder);
@@ -356,11 +382,13 @@ pub fn plan(
 
     // Re-creations, each followed later by the quarantine of the copy it replaces.
     let mut replaced: Vec<(usize, usize)> = Vec::new();
+    let mut recreated: HashMap<usize, usize> = HashMap::new();
     for (s, to) in recreate {
         let item = &source[s];
         if let Some(&copy) = copy_of.get(&s) {
             replaced.push((copy, actions.len()));
         }
+        recreated.insert(s, actions.len());
         actions.push(Action::Recreate {
             source: item.key.clone(),
             to,
@@ -387,19 +415,32 @@ pub fn plan(
         });
     }
     for (index, role) in audit.target_roles.iter().enumerate() {
-        if !at_top(index) {
-            continue;
-        }
-        let (to, reason) = match role {
-            TargetRole::Duplicate { .. } => (&quarantine, "duplicate"),
-            TargetRole::Unmatched if target[index].folder.is_empty() => (&unmatched, "unmatched"),
+        let (to, reason, requires) = match role {
+            TargetRole::Duplicate { .. } if at_top(index) => (&quarantine, "duplicate", None),
+            // An extra copy an earlier plan made, once its source item keeps a
+            // healthy copy or is re-created.
+            TargetRole::Duplicate { source: s } if created(index) => match recreated.get(s) {
+                Some(&step) => (&quarantine, "duplicate", Some(step)),
+                None if crate::verify::in_scope(&source[*s])
+                    && matches!(
+                        audit.source_status[*s],
+                        SourceStatus::Ok | SourceStatus::Misplaced
+                    ) =>
+                {
+                    (&quarantine, "duplicate", None)
+                }
+                None => continue,
+            },
+            TargetRole::Unmatched if target[index].folder.is_empty() => {
+                (&unmatched, "unmatched", None)
+            }
             _ => continue,
         };
         actions.push(Action::Move {
             item: target[index].key.clone(),
             to: to.clone(),
             reason: reason.into(),
-            requires: None,
+            requires,
         });
     }
     actions
@@ -481,7 +522,7 @@ mod tests {
             &target,
             &folders(),
             &existing,
-            &HashSet::new(),
+            &Applied::default(),
             "run1",
         );
 
@@ -569,7 +610,7 @@ mod tests {
             &target,
             &folders(),
             &existing,
-            &HashSet::new(),
+            &Applied::default(),
             "r",
         );
         assert!(actions.is_empty(), "{actions:?}");
@@ -599,24 +640,177 @@ mod tests {
             std::slice::from_ref(&emptied),
             &folders(),
             &existing,
-            &HashSet::new(),
+            &Applied::default(),
             "r",
         );
         assert!(untouched.is_empty(), "{untouched:?}");
-        let moved: HashSet<String> = ["t-moved".to_owned()].into();
+        let applied = Applied {
+            moved: ids(&["t-moved"]),
+            ..Default::default()
+        };
         let actions = plan(
             &audit,
             &mapped,
             &[emptied],
             &folders(),
             &existing,
-            &moved,
+            &applied,
             "r",
         );
         assert_eq!(counts(&actions), [("recreate", 1), ("quarantine", 1)]);
         assert!(
             matches!(&actions[1], Action::Move { requires: Some(0), reason, .. } if reason == "damaged")
         );
+    }
+
+    fn ids(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|&key| key.to_owned()).collect()
+    }
+
+    fn existing() -> BTreeSet<String> {
+        [
+            "Boîte de réception",
+            "Éléments envoyés",
+            "ecm-quarantine",
+            "ecm-quarantine/r",
+            "ecm-unmatched",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    #[test]
+    fn replaces_a_degraded_copy_an_earlier_apply_created() {
+        let inbox = "Boîte de réception";
+        let source = vec![
+            message("s1", inbox, "<1>", 3),
+            message("s2", inbox, "<2>", 3),
+            message("s3", inbox, "<3>", 3),
+        ];
+        // HTML turned into text: degraded.
+        let created = message("t-created", inbox, "<1>", 1);
+        let mut again = message("t-again", inbox, "<1>", 1);
+        again.read = Some(false);
+        let filed = message("t-filed", inbox, "<2>", 1);
+        // Replacing this created copy would leave the filed one next to the new
+        // one.
+        let beside = message("t-beside", inbox, "<3>", 1);
+        let mut filed_too = message("t-filed-too", inbox, "<3>", 1);
+        filed_too.read = Some(false);
+        let target = vec![created, again, filed, beside, filed_too];
+        let audit = audit(&source, &target, 1000);
+        assert_eq!(audit.source_status, [SourceStatus::Degraded; 3]);
+
+        // Copies ecm did not put there are never touched.
+        let untouched = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &Applied::default(),
+            "r",
+        );
+        assert!(untouched.is_empty(), "{untouched:?}");
+
+        let applied = Applied {
+            created: ids(&["t-created", "t-again", "t-beside"]),
+            ..Default::default()
+        };
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &applied,
+            "r",
+        );
+        assert!(
+            matches!(&actions[0], Action::Recreate { source, to, .. } if source == "s1" && to == inbox)
+        );
+        let quarantine = "ecm-quarantine/r".to_owned();
+        assert_eq!(
+            actions[1..],
+            [
+                Action::Move {
+                    item: "t-created".into(),
+                    to: quarantine.clone(),
+                    reason: "damaged".into(),
+                    requires: Some(0),
+                },
+                Action::Move {
+                    item: "t-again".into(),
+                    to: quarantine,
+                    reason: "duplicate".into(),
+                    requires: Some(0),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_a_healthy_copy_an_earlier_apply_created_and_sets_its_extras_aside() {
+        let inbox = "Boîte de réception";
+        let source = vec![message("s1", inbox, "<1>", 3)];
+        let target = vec![
+            message("t-created", inbox, "<1>", 3),
+            message("t-again", inbox, "<1>", 3),
+            message("t-filed", inbox, "<1>", 3),
+        ];
+        let audit = audit(&source, &target, 1000);
+        assert_eq!(audit.source_status, [SourceStatus::Ok]);
+        let applied = Applied {
+            created: ids(&["t-created", "t-again"]),
+            ..Default::default()
+        };
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &applied,
+            "r",
+        );
+        assert_eq!(
+            actions,
+            [Action::Move {
+                item: "t-again".into(),
+                to: "ecm-quarantine/r".into(),
+                reason: "duplicate".into(),
+                requires: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn does_not_recreate_a_sent_item_whose_twin_is_in_recoverable_items() {
+        // Sent twice, and kept once more in Recoverable Items; an earlier plan
+        // created both sent copies.
+        let sent = "Éléments envoyés";
+        let source = vec![
+            message("kept", &path::join("Recoverable Items", "Purges"), "<1>", 3),
+            message("s1", sent, "<1>", 3),
+            message("s2", sent, "<1>", 3),
+        ];
+        let target = vec![message("t1", sent, "<1>", 3), message("t2", sent, "<1>", 3)];
+        let audit = audit(&source, &target, 1000);
+        let applied = Applied {
+            created: ids(&["t1", "t2"]),
+            ..Default::default()
+        };
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &applied,
+            "r",
+        );
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     #[test]

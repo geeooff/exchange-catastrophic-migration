@@ -12,7 +12,7 @@ use std::{
 use base64::Engine as _;
 use ecm_audit::{
     Defect, SourceStatus, TargetRole,
-    plan::{Action, QUARANTINE_FOLDER, counts, plan},
+    plan::{Action, Applied, QUARANTINE_FOLDER, counts, plan},
     verify::is_parked,
 };
 use ecm_model::{
@@ -219,7 +219,7 @@ pub fn plan_pst_command(
         &target,
         &folders,
         &existing,
-        &HashSet::new(),
+        &Applied::default(),
         &run,
     );
     if replacements_only {

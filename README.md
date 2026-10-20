@@ -31,7 +31,8 @@ journals each step and resumes where it stopped.
 3. **Plan**: each command writes a JSON Lines plan.
    - `ecm plan`: create folders, re-create damaged or missing messages from
      Outlook.com, move misplaced copies, move duplicates and damaged copies to a
-     quarantine folder. `--after <plan>` replaces copies an earlier plan moved.
+     quarantine folder. `--after <plan>` replaces copies an earlier plan moved and
+     degraded copies it re-created, and quarantines extra copies it re-created.
    - `ecm plan-pst`: re-create from a PST, rebuilt as MIME with the original headers,
      bodies, attachments and S/MIME signed entities, the messages the target lacks or
      earlier plans made badly. With `--outlook-com`, the target is an Outlook.com

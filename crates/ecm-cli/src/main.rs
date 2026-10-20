@@ -187,7 +187,9 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
         /// An applied plan: the migration copies it moved into folders are
-        /// re-created from the source and quarantined. Repeat for several plans.
+        /// re-created from the source and quarantined, and so are the copies it
+        /// re-created from Outlook.com that are degraded; extra copies it
+        /// re-created are quarantined. Repeat for several plans.
         #[arg(long, value_name = "PLAN")]
         after: Vec<PathBuf>,
     },
