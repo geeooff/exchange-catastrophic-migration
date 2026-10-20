@@ -201,7 +201,38 @@ property.
 | M7b ✅ | Outlook.com / Microsoft 365 (Microsoft Graph) as a source, read-only, device code sign-in | Inventory and audit against Graph give the same matches as against a complete PST |
 | M7c ✅ | Calendar, contacts and photos, tasks, notes, inbox rules (`plan-pim`, `plan-contact-photos`, `plan-notes`, `plan-rules`) | Each type is copied without duplicates and checked on the target |
 | M8 ✅ | Release 0.1 | Documentation, binaries for Windows x64 |
-| M9 | Microsoft Graph as a target (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, `plan-pst --outlook-com` and `apply-graph` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
+| M9 ✅ | Microsoft Graph as a target for messages (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, `plan-pst --outlook-com` and `apply-graph` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
+| M9b | Microsoft Graph as a target for every other item type: calendar, contacts and photos, To Do tasks, inbox rules, categories, notes. Source: an Exchange mailbox read over EWS (the part of M7 these types need). See [Graph as a target](#graph-as-a-target-for-every-item-type) | Each type, copied into test containers of a real Outlook.com mailbox, matches its source on every compared property; what Graph cannot do is documented |
+
+### Graph as a target for every item type
+
+Milestone M9b, after messages (M9). Same method: a fidelity test first, then plans and
+`apply-graph`, then a check.
+
+1. **Permissions**: the app registration also gets the delegated `Calendars.ReadWrite`,
+   `Contacts.ReadWrite`, `Tasks.ReadWrite` and `MailboxSettings.ReadWrite` (rules,
+   categories); the user consents at sign-in.
+2. **Source**: an Exchange mailbox read over EWS, whole: calendar items with their
+   recurrence, exceptions, attendees and time zones; contacts and their photos; tasks;
+   notes; inbox rules; categories. This is the part of M7 these types need.
+3. **Test containers** in the target, never its real ones: a calendar, a contact folder
+   and a To Do list named `ecm-test`, rules created disabled and categories, both with
+   an `ecm-test` prefix. Nothing else in the mailbox is touched; the user deletes them
+   at the end.
+4. **Fidelity test** per type: a few items created, read back and compared property by
+   property with the source. Open questions:
+   - events with attendees: whether Graph sends invitations when it creates them (it
+     must not), time zones, recurrences and their exceptions, reminders;
+   - contacts: every field, the photo (`PUT /contacts/{id}/photo/$value`);
+   - To Do tasks: due date, reminder, recurrence, completion, notes;
+   - inbox rules (`messageRules`): conditions, actions, folders by id;
+   - notes (`IPM.StickyNote`): no known Graph API; try a message of that class in
+     the Notes folder, else document the limit;
+   - contact groups (distribution lists) and safe and blocked senders: no Graph API
+     known, to document as limits (the latter stay a setting the user makes).
+5. **Plans and `apply-graph`** for each type, journaled and resumable, and a check
+   comparing each type between the target (Graph) and the source (EWS).
+6. **A full run** of every type into the test containers, then the check.
 
 ## 8. Testing
 
