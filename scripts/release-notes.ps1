@@ -46,7 +46,7 @@ $commits = if ($previous) {
 }
 
 $lines = @(
-    'Audits and repairs an Exchange mailbox after a botched migration, from a PST file or an Outlook.com mailbox. Windows x64.',
+    'Audits and repairs a mailbox after a botched migration: an Exchange one over EWS, or an Outlook.com one through Microsoft Graph, from a PST file or an Outlook.com mailbox. Windows x64.',
     '',
     '## Install',
     '',
