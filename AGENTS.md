@@ -56,6 +56,10 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   with its checksum: tag only with the user's go-ahead.
 - Agents may push branches, open PRs, fix CI failures and enable auto-merge
   (`gh pr merge --auto --merge`). Never bypass a required check or the ruleset.
+- A change that adds, extends or limits what can be migrated (an item type, a source,
+  a target, a limit) updates [docs/supported-migrations.md](docs/supported-migrations.md)
+  in the same pull request. A test fails when the page names a command or flag that
+  does not exist.
 - Commit only when asked. Messages say what and why, ending with the
   `Co-Authored-By` line.
 
