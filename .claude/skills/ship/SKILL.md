@@ -9,7 +9,9 @@ description: Finish a milestone or change - checklist, docs, commit, push, PR - 
 3. Update the docs: `docs/plan.md` (mark the milestone ✅, add any new risk or
    lesson), `README.md` status, `AGENTS.md` if a rule or gotcha changed, the
    `CHANGELOG.md` section of the next release, and section 0 of
-   `.claude/plan.local.md`.
+   `.claude/plan.local.md`. When the change adds, extends or limits what can be
+   migrated, update the matrix of `docs/supported-migrations.md` (the cell, its
+   command, the note on its limits).
 4. Make sure nothing private is staged: `git status --short`, no `*.local.*`, no real
    paths or addresses in tracked files.
 5. Commit with a message that says what and why, ending with the `Co-Authored-By`

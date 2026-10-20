@@ -8,6 +8,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Added
 
+- [docs/supported-migrations.md](docs/supported-migrations.md): what can be
+  migrated, for each item type, from each source to each target, with its
+  command and its limits.
 - `plan-pst --keys FILE`: consider only the PST messages listed, to split a large
   restore into plans of a reasonable size.
 - `plan-pst --rename FROM=TO`: put the messages of a source folder, and of the

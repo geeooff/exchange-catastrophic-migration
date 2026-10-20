@@ -12,7 +12,8 @@ arrived after the migration.
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
 > An Outlook.com mailbox as a target, through Microsoft Graph, is being validated
-> (`ecm fidelity-graph`, `ecm check-content --outlook-com`).
+> (`ecm fidelity-graph`, `ecm check-content --outlook-com`). What can be migrated,
+> from which source to which target: [docs/supported-migrations.md](docs/supported-migrations.md).
 
 ## How it works
 
@@ -82,8 +83,10 @@ it against its `.sha256`, and unzip `ecm.exe` anywhere. To build it yourself:
 - **Outlook.com (Microsoft Graph)**: register an application in Microsoft Entra
   (accounts in any identity provider or personal Microsoft accounts, public client
   flows allowed, delegated `Mail.Read`, `Contacts.Read`, `Calendars.Read`,
-  `Tasks.Read`, `User.Read`, and `MailboxSettings.Read` for inbox rules), then pass its
-  application id with `--client-id`. You sign in in your browser with a code `ecm`
+  `Tasks.Read`, `User.Read`, and `MailboxSettings.Read` for inbox rules; add
+  `Mail.ReadWrite` to write into Outlook.com), then pass its application id with
+  `--client-id`. For Microsoft 365, the registration must accept work or school
+  accounts. You sign in in your browser with a code `ecm`
   shows; tokens stay in memory.
 - Work files (inventories, plans, journals, reports) contain mailbox data: keep them
   private.

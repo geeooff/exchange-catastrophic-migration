@@ -203,6 +203,7 @@ property.
 | M8 ✅ | Release 0.1 | Documentation, binaries for Windows x64 |
 | M9 ✅ | Microsoft Graph as a target for messages (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, `plan-pst --outlook-com` and `apply-graph` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
 | M9b | Microsoft Graph as a target for every other item type: calendar, contacts and photos, To Do tasks, inbox rules, categories, notes. Source: an Exchange mailbox read over EWS (the part of M7 these types need). See [Graph as a target](#graph-as-a-target-for-every-item-type) | Each type, copied into test containers of a real Outlook.com mailbox, matches its source on every compared property; what Graph cannot do is documented |
+| M10 | PST as a source for calendar items (recurrences and their exceptions, [MS-OXOCAL]), contacts and their photos, and tasks | Each type, copied from a PST to EWS and to Graph, matches the PST on every compared property |
 
 ### Graph as a target for every item type
 

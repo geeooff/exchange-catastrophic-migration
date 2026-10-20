@@ -1144,4 +1144,42 @@ mod tests {
         assert_eq!(format_size(271_360), "271.36 KB");
         assert_eq!(format_size(5_060_000_000), "5.06 GB");
     }
+
+    /// Every `ecm <command>` the supported migrations page names exists: a command
+    /// renamed or removed fails here until the page follows.
+    #[test]
+    fn the_supported_migrations_page_names_real_commands() {
+        let page = include_str!("../../../docs/supported-migrations.md");
+        let cli = Cli::command();
+        let mut named = 0;
+        for (index, _) in page.match_indices("`ecm ") {
+            let rest = &page[index + 5..];
+            let words: Vec<&str> = rest
+                .split('`')
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect();
+            let Some(command) = words.first() else {
+                continue;
+            };
+            let found = cli.find_subcommand(command);
+            assert!(
+                found.is_some(),
+                "the page names `ecm {command}`, which does not exist"
+            );
+            for flag in words.iter().skip(1).filter(|w| w.starts_with("--")) {
+                let name = flag.trim_start_matches('-');
+                assert!(
+                    found
+                        .unwrap()
+                        .get_arguments()
+                        .any(|arg| arg.get_long() == Some(name)),
+                    "the page names `ecm {command} {flag}`, which does not exist"
+                );
+            }
+            named += 1;
+        }
+        assert!(named > 10, "the page names only {named} commands");
+    }
 }
