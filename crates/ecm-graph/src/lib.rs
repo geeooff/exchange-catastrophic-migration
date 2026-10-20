@@ -4,12 +4,14 @@
 //! Sign-in uses the OAuth 2.0 device code flow: the user opens a Microsoft page,
 //! types a short code and signs in there. This tool never sees the password and
 //! keeps the tokens in memory for the run. Reading asks only for read
-//! permissions; changing a mailbox asks for `Mail.ReadWrite`.
+//! permissions; changing a mailbox asks for `Mail.ReadWrite`, and for the other
+//! item types `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite` and
+//! `MailboxSettings.ReadWrite` ([`auth::PIM_WRITE_SCOPES`]).
 //!
 //! It needs the client id of an app registration that allows personal Microsoft
 //! accounts and public client flows, with the delegated `Mail.Read`,
 //! `Contacts.Read`, `Calendars.Read`, `Tasks.Read` and `User.Read` permissions,
-//! `MailboxSettings.Read` to read inbox rules, and `Mail.ReadWrite` to write.
+//! `MailboxSettings.Read` to read inbox rules, and the `ReadWrite` ones to write.
 
 #![forbid(unsafe_code)]
 

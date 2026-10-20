@@ -11,6 +11,7 @@ mod cleanup_cmd;
 mod content_cmd;
 mod fidelity_cmd;
 mod graph_cmd;
+mod graph_pim_cmd;
 mod graph_plan_cmd;
 mod notes_cmd;
 mod pim_cmd;
@@ -145,6 +146,28 @@ enum Command {
         /// Work directory holding the Exchange inventory.
         #[arg(long, value_name = "DIR")]
         work: Option<PathBuf>,
+    },
+    /// Copy a few calendar items, contacts and tasks of an Exchange mailbox into
+    /// the `ecm-test` calendar, contact folder and To Do list of an Outlook.com
+    /// mailbox through Microsoft Graph, read each copy back and compare it with
+    /// its source. Only creates items, only there; events go without their
+    /// attendees, so no invitation is sent.
+    FidelityGraphPim {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// Fewest items of each type to copy. More are picked until every
+        /// property and value the source has shows in one of them.
+        #[arg(long, default_value_t = 3)]
+        count: usize,
+        /// Only print what would be created; no sign-in to Outlook.com.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Write a reviewable plan of repair actions (JSON Lines). Only reads.
     Plan {
@@ -535,7 +558,26 @@ struct EwsArgs {
     credential: Option<String>,
 }
 
+/// Stack of the thread commands run on. The main thread's (1 MB on Windows) is
+/// too small for the command dispatch in debug builds.
+const STACK_SIZE: usize = 16 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    match std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(run)
+        .map(std::thread::JoinHandle::join)
+    {
+        Ok(Ok(code)) => code,
+        Ok(Err(_)) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("ecm: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Source(SourceCommand::Check { pst, all_folders }) => {
@@ -607,6 +649,18 @@ fn main() -> ExitCode {
                 reference,
             ))
         }
+        Command::FidelityGraphPim {
+            ews,
+            client_id,
+            tenant,
+            count,
+            dry_run,
+        } => report(graph_pim_cmd::fidelity_graph_pim(
+            &ews,
+            &audit_cmd::GraphArgs { client_id, tenant },
+            count,
+            dry_run,
+        )),
         Command::Target(TargetCommand::Check { ews, all_folders }) => {
             report(target_check(&ews, all_folders))
         }

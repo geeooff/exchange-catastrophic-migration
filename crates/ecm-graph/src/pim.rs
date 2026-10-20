@@ -62,6 +62,11 @@ impl<T: Transport> GraphClient<T> {
         Ok(rules)
     }
 
+    /// The master category list. Needs the `MailboxSettings.Read` scope.
+    pub fn master_categories(&self) -> Result<Vec<Value>> {
+        self.get_all("/me/outlook/masterCategories")
+    }
+
     /// The path of a mail folder from the top of the mailbox (`/`-separated,
     /// with `/` in names escaped as in [`ecm_model::path`]).
     pub fn folder_path(&self, id: &str) -> Result<String> {

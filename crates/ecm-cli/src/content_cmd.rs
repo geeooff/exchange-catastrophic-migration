@@ -266,11 +266,16 @@ fn body_shows(text: Option<&str>, html: Option<&[u8]>) -> bool {
     let Some(html) = html else {
         return false;
     };
-    let lower = html.to_ascii_lowercase();
-    if lower.windows(4).any(|w| w == b"<img") {
+    if html.to_ascii_lowercase().windows(4).any(|w| w == b"<img") {
         return true;
     }
-    // Text outside tags, styles, scripts and comments, other than spaces.
+    !html_text(html).is_empty()
+}
+
+/// The text an HTML body shows: outside the head, tags, styles, scripts and
+/// comments, with entities decoded and spaces collapsed. A tag counts as a space.
+pub(crate) fn html_text(html: &[u8]) -> String {
+    let lower = html.to_ascii_lowercase();
     let mut text = Vec::new();
     let mut in_tag = false;
     let mut skip_until: Option<&[u8]> = None;
@@ -285,7 +290,9 @@ fn body_shows(text: Option<&str>, html: Option<&[u8]>) -> bool {
             }
             continue;
         }
-        if lower[i..].starts_with(b"<style") {
+        if lower[i..].starts_with(b"<head>") || lower[i..].starts_with(b"<head ") {
+            skip_until = Some(b"</head>");
+        } else if lower[i..].starts_with(b"<style") {
             skip_until = Some(b"</style>");
         } else if lower[i..].starts_with(b"<script") {
             skip_until = Some(b"</script>");
@@ -293,17 +300,64 @@ fn body_shows(text: Option<&str>, html: Option<&[u8]>) -> bool {
             skip_until = Some(b"-->");
         } else if lower[i] == b'<' {
             in_tag = true;
+            text.push(b' ');
         } else if lower[i] == b'>' {
             in_tag = false;
         } else if !in_tag {
-            text.push(lower[i]);
+            text.push(html[i]);
         }
         i += 1;
     }
-    String::from_utf8_lossy(&text)
-        .replace("&nbsp;", " ")
-        .chars()
-        .any(|c| !c.is_whitespace() && c != '\u{a0}')
+    collapse_spaces(&decode_entities(&String::from_utf8_lossy(&text)))
+}
+
+/// Words of a text joined by single spaces (no-break spaces count as spaces).
+pub(crate) fn collapse_spaces(text: &str) -> String {
+    text.split(|c: char| c.is_whitespace() || c == '\u{a0}')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Decodes HTML character references: the common named ones and numeric ones.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let decoded = rest.find(';').filter(|&end| end <= 10).and_then(|end| {
+            let name = &rest[1..end];
+            let c = match name {
+                "nbsp" => Some(' '),
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => match name.strip_prefix('#') {
+                    Some(hex) if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16)
+                        .ok()
+                        .and_then(char::from_u32),
+                    Some(decimal) => decimal.parse().ok().and_then(char::from_u32),
+                    None => None,
+                },
+            }?;
+            Some((c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A copy's files, as name and content.

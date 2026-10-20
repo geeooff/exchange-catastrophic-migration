@@ -1,5 +1,6 @@
 //! Every change this crate makes to a mailbox: folders, messages, their files,
-//! moves. Nothing is ever deleted.
+//! moves; calendars, events, contact folders, contacts and their photos, To Do
+//! lists and tasks, inbox rules, categories. Nothing is ever deleted.
 
 use base64::Engine as _;
 use serde_json::{Value, json};
@@ -185,6 +186,96 @@ impl<T: Transport> GraphClient<T> {
             &json!({ "destinationId": folder_id }),
         )?)
     }
+
+    /// The id of the element of `collection` whose `field` is `name`, created
+    /// when missing.
+    fn ensure_named(&self, collection: &str, field: &str, name: &str) -> Result<String> {
+        let found = self.get_all(&format!("{collection}?$top=100"))?;
+        if let Some(existing) = found.iter().find(|e| e[field].as_str() == Some(name)) {
+            return Self::id_of(existing);
+        }
+        Self::id_of(&self.send_json("POST", collection, &json!({ field: name }))?)
+    }
+
+    /// The id of the calendar `name`, created when missing.
+    pub fn ensure_calendar(&self, name: &str) -> Result<String> {
+        self.ensure_named("/me/calendars", "name", name)
+    }
+
+    /// The id of the contact folder `name`, created when missing.
+    pub fn ensure_contact_folder(&self, name: &str) -> Result<String> {
+        self.ensure_named("/me/contactFolders", "displayName", name)
+    }
+
+    /// The id of the To Do list `name`, created when missing.
+    pub fn ensure_todo_list(&self, name: &str) -> Result<String> {
+        self.ensure_named("/me/todo/lists", "displayName", name)
+    }
+
+    /// Creates an event in a calendar. An event without attendees sends no
+    /// invitation; with attendees, Graph would send them one.
+    pub fn create_event(&self, calendar_id: &str, event: &Value) -> Result<String> {
+        Self::id_of(&self.send_json(
+            "POST",
+            &format!("/me/calendars/{}/events", encode(calendar_id)),
+            event,
+        )?)
+    }
+
+    /// Creates a contact in a contact folder.
+    pub fn create_contact(&self, folder_id: &str, contact: &Value) -> Result<String> {
+        Self::id_of(&self.send_json(
+            "POST",
+            &format!("/me/contactFolders/{}/contacts", encode(folder_id)),
+            contact,
+        )?)
+    }
+
+    /// Sets the photo (JPEG or PNG bytes) of a contact of a contact folder.
+    pub fn set_contact_photo(&self, folder_id: &str, contact_id: &str, photo: &[u8]) -> Result<()> {
+        let content_type = if photo.starts_with(b"\x89PNG") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        self.request(
+            "PUT",
+            &format!(
+                "/me/contactFolders/{}/contacts/{}/photo/$value",
+                encode(folder_id),
+                encode(contact_id)
+            ),
+            "application/json",
+            Some(content_type),
+            photo,
+            None,
+        )
+        .map(|_| ())
+    }
+
+    /// Creates an inbox rule. Needs the `MailboxSettings.ReadWrite` scope.
+    pub fn create_inbox_rule(&self, rule: &Value) -> Result<String> {
+        Self::id_of(&self.send_json("POST", "/me/mailFolders/inbox/messageRules", rule)?)
+    }
+
+    /// Creates a category of the master list, with a color `none` or `preset0`
+    /// to `preset24`. Needs the `MailboxSettings.ReadWrite` scope.
+    pub fn create_category(&self, name: &str, color: &str) -> Result<String> {
+        Self::id_of(&self.send_json(
+            "POST",
+            "/me/outlook/masterCategories",
+            &json!({ "displayName": name, "color": color }),
+        )?)
+    }
+
+    /// Creates a task in a To Do list.
+    pub fn create_task(&self, list_id: &str, task: &Value) -> Result<String> {
+        Self::id_of(&self.send_json(
+            "POST",
+            &format!("/me/todo/lists/{}/tasks", encode(list_id)),
+            task,
+        )?)
+    }
 }
 
 #[cfg(test)]
@@ -325,5 +416,93 @@ mod tests {
         assert_eq!(body["contentBytes"], "cG5n");
         assert_eq!(body["isInline"], true);
         assert_eq!(body["contentId"], "logo@x");
+    }
+
+    #[test]
+    fn creates_containers_once_and_items_in_them() {
+        let fake = FakeTransport::new([
+            (200, r#"{"value":[{"id":"C0","name":"Calendar"}]}"#.into()),
+            (201, r#"{"id":"C1","name":"ecm-test"}"#.into()),
+            (
+                200,
+                r#"{"value":[{"id":"F1","displayName":"ecm-test"}]}"#.into(),
+            ),
+            (200, r#"{"value":[]}"#.into()),
+            (201, r#"{"id":"L1"}"#.into()),
+            (201, r#"{"id":"E1"}"#.into()),
+            (201, r#"{"id":"P1"}"#.into()),
+            (200, String::new()),
+            (201, r#"{"id":"T1"}"#.into()),
+        ]);
+        let client = GraphClient::new(&fake, "t".into());
+        assert_eq!(client.ensure_calendar("ecm-test").unwrap(), "C1");
+        assert_eq!(client.ensure_contact_folder("ecm-test").unwrap(), "F1");
+        assert_eq!(client.ensure_todo_list("ecm-test").unwrap(), "L1");
+        assert_eq!(
+            client.create_event("C1", &json!({"subject": "x"})).unwrap(),
+            "E1"
+        );
+        assert_eq!(
+            client
+                .create_contact("F1", &json!({"displayName": "Ann"}))
+                .unwrap(),
+            "P1"
+        );
+        client
+            .set_contact_photo("F1", "P1", b"\xff\xd8jpeg")
+            .unwrap();
+        assert_eq!(
+            client.create_task("L1", &json!({"title": "t"})).unwrap(),
+            "T1"
+        );
+        let requests = fake.requests.borrow();
+        assert_eq!(requests[1].0, "POST");
+        assert!(requests[1].1.ends_with("/me/calendars"));
+        assert_eq!(requests[1].2, r#"{"name":"ecm-test"}"#);
+        assert!(requests[2].1.contains("/me/contactFolders?"));
+        assert_eq!(requests[4].2, r#"{"displayName":"ecm-test"}"#);
+        assert!(requests[5].1.ends_with("/me/calendars/C1/events"));
+        assert!(requests[6].1.ends_with("/me/contactFolders/F1/contacts"));
+        assert_eq!(requests[7].0, "PUT");
+        assert!(
+            requests[7]
+                .1
+                .ends_with("/me/contactFolders/F1/contacts/P1/photo/$value")
+        );
+        assert!(
+            requests[7]
+                .3
+                .iter()
+                .any(|(n, v)| n == "Content-Type" && v == "image/jpeg")
+        );
+        assert!(requests[8].1.ends_with("/me/todo/lists/L1/tasks"));
+    }
+
+    #[test]
+    fn creates_rules_and_categories() {
+        let fake = FakeTransport::new([
+            (201, r#"{"id":"R1"}"#.into()),
+            (201, r#"{"id":"K1"}"#.into()),
+        ]);
+        let client = GraphClient::new(&fake, "t".into());
+        let rule = json!({"displayName": "ecm-test x", "isEnabled": false});
+        assert_eq!(client.create_inbox_rule(&rule).unwrap(), "R1");
+        assert_eq!(
+            client
+                .create_category("ecm-test Famille", "preset9")
+                .unwrap(),
+            "K1"
+        );
+        let requests = fake.requests.borrow();
+        assert!(
+            requests[0]
+                .1
+                .ends_with("/me/mailFolders/inbox/messageRules")
+        );
+        assert!(requests[1].1.ends_with("/me/outlook/masterCategories"));
+        assert_eq!(
+            requests[1].2,
+            r#"{"color":"preset9","displayName":"ecm-test Famille"}"#
+        );
     }
 }

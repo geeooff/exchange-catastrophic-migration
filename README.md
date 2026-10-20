@@ -11,8 +11,9 @@ arrived after the migration.
 > **Status: 0.1, used on a real mailbox.** It repaired a mailbox of
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates. See [docs/plan.md](docs/plan.md).
-> An Outlook.com mailbox as a target, through Microsoft Graph, is being validated
-> (`ecm fidelity-graph`, `ecm check-content --outlook-com`). What can be migrated,
+> An Outlook.com mailbox as a target, through Microsoft Graph, repaired a real
+> mailbox's messages; the other item types are being validated
+> (`ecm fidelity-graph-pim`). What can be migrated,
 > from which source to which target: [docs/supported-migrations.md](docs/supported-migrations.md).
 
 ## How it works
@@ -55,7 +56,10 @@ safe to delete (they involve the moved domain and the target has them) and those
 look at, without changing anything: the deletion is yours, in that mailbox.
 
 `ecm fidelity-test` re-creates a few items in an `ecm-test` folder and compares them
-property by property with their reference.
+property by property with their reference. `ecm fidelity-graph` and
+`ecm fidelity-graph-pim` do the same in an Outlook.com mailbox: messages from a
+PST, and calendar items, contacts, tasks, inbox rules and categories from an
+Exchange mailbox, into `ecm-test` containers.
 
 ## What it does
 
@@ -84,7 +88,9 @@ it against its `.sha256`, and unzip `ecm.exe` anywhere. To build it yourself:
   (accounts in any identity provider or personal Microsoft accounts, public client
   flows allowed, delegated `Mail.Read`, `Contacts.Read`, `Calendars.Read`,
   `Tasks.Read`, `User.Read`, and `MailboxSettings.Read` for inbox rules; add
-  `Mail.ReadWrite` to write into Outlook.com), then pass its application id with
+  `Mail.ReadWrite` to write messages into Outlook.com, and `Calendars.ReadWrite`,
+  `Contacts.ReadWrite`, `Tasks.ReadWrite` and `MailboxSettings.ReadWrite` for the
+  other item types), then pass its application id with
   `--client-id`. For Microsoft 365, the registration must accept work or school
   accounts. You sign in in your browser with a code `ecm`
   shows; tokens stay in memory.

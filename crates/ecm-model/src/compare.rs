@@ -41,7 +41,13 @@ pub struct Difference {
 /// length is equal when within 5 % or 64 characters: servers re-encode bodies. A
 /// property missing from the reference is not compared.
 pub fn compare(reference: &PropertyMap, copy: &PropertyMap) -> Vec<Difference> {
-    COMPARED
+    compare_on(COMPARED, reference, copy)
+}
+
+/// Like [`compare`], on the properties `names` (those of calendar items,
+/// contacts or tasks).
+pub fn compare_on(names: &[&str], reference: &PropertyMap, copy: &PropertyMap) -> Vec<Difference> {
+    names
         .iter()
         .filter_map(|&name| {
             let expected = reference.get(name)?;
