@@ -90,7 +90,9 @@ EWS. Public repo: no personal data. Roadmap and design: [docs/plan.md](docs/plan
   sent inline (with a Content-ID) is hidden from the files: inline only when the
   HTML shows it (`cid:`). Requests take about 4 MB: larger files go through upload
   sessions; Outlook.com refuses messages past about 40 MB. A device code expires
-  after 15 minutes.
+  after 15 minutes. Graph pages a folder's messages by offset: a message removed
+  during the listing makes another slip between pages, so inventories read the
+  ids again.
 - EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
   in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
   each Graph event again with `Prefer: outlook.timezone` in its own zone.
