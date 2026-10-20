@@ -644,10 +644,12 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         .map(|()| item)
                 }
             },
-            Action::CreateMessage { .. } => Err(
-                "a create-message step is for Outlook.com: run the plan with `ecm apply-graph`"
-                    .into(),
-            ),
+            Action::CreateMessage { .. } | Action::CreateGraph { .. } | Action::SetPhoto { .. } => {
+                Err(format!(
+                    "a {} step is for Outlook.com: run the plan with `ecm apply-graph`",
+                    action.kind()
+                ))
+            }
             Action::Move { .. } => unreachable!("moves are batched"),
         };
         self.record(step, result)

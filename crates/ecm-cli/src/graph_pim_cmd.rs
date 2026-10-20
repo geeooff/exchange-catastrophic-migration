@@ -201,6 +201,12 @@ fn graph_utc(value: &Value) -> Option<String> {
     parse_utc(&format!("{}Z", time.get(..19)?)).map(format_iso)
 }
 
+/// The day of a Graph `dateTimeTimeZone`, as written: an all-day event's days
+/// are the same in every zone, and Graph gives them as they were set.
+fn day(value: &Value) -> Option<String> {
+    value["dateTime"].as_str()?.get(..10).map(str::to_owned)
+}
+
 /// The text a body shows, spaces collapsed.
 fn shown_text(content: &str, html: bool) -> String {
     if html {
@@ -374,13 +380,10 @@ pub fn graph_event(item: &Element) -> (Value, Vec<String>) {
             None => left_out.push("its recurrence (a pattern Graph does not have)".into()),
         }
     }
-    let attendees: usize = ["RequiredAttendees", "OptionalAttendees", "Resources"]
-        .iter()
-        .map(|name| {
-            item.child(name)
-                .map_or(0, |l| l.children_named("Attendee").count())
-        })
-        .sum();
+    if text(item, "IsOrganizer").as_deref() == Some("false") {
+        left_out.push("its organizer: the copy is the user's own event".into());
+    }
+    let attendees = attendees(item).len();
     if attendees > 0 {
         left_out.push(format!(
             "its attendees ({attendees}): Graph would send them invitations"
@@ -396,6 +399,22 @@ pub fn graph_event(item: &Element) -> (Value, Vec<String>) {
         }
     }
     (Value::Object(event), left_out)
+}
+
+/// The addresses of an event's attendees, but its organizer's: a client often
+/// lists the organizer too, and the copy is the organizer's own event.
+fn attendees(item: &Element) -> Vec<String> {
+    let organizer = item
+        .path(&["Organizer", "Mailbox", "EmailAddress"])
+        .map(|e| e.text.trim().to_lowercase());
+    ["RequiredAttendees", "OptionalAttendees", "Resources"]
+        .iter()
+        .filter_map(|name| item.child(name))
+        .flat_map(|list| list.children_named("Attendee"))
+        .filter_map(|a| a.path(&["Mailbox", "EmailAddress"]))
+        .map(|e| e.text.trim().to_owned())
+        .filter(|a| !a.is_empty() && Some(a.to_lowercase()) != organizer)
+        .collect()
 }
 
 /// Graph's `patternedRecurrence` for an EWS recurrence, in `zone`; `None` for a
@@ -552,13 +571,20 @@ pub fn ews_event_properties(item: &Element) -> PropertyMap {
     let (event, _) = graph_event(item);
     let mut props = PropertyMap::new();
     put(&mut props, "subject", text(item, "Subject"));
-    put(&mut props, "start", utc(item, "Start"));
-    put(&mut props, "end", utc(item, "End"));
-    put(
-        &mut props,
-        "time_zone",
-        event["start"]["timeZone"].as_str().map(str::to_owned),
-    );
+    // An all-day event's days are the same in every zone: Graph may keep it
+    // in UTC.
+    if event["isAllDay"].as_bool() == Some(true) {
+        put(&mut props, "start", day(&event["start"]));
+        put(&mut props, "end", day(&event["end"]));
+    } else {
+        put(&mut props, "start", utc(item, "Start"));
+        put(&mut props, "end", utc(item, "End"));
+        put(
+            &mut props,
+            "time_zone",
+            event["start"]["timeZone"].as_str().map(str::to_owned),
+        );
+    }
     put(&mut props, "all_day", Some(event["isAllDay"].to_string()));
     for (name, field) in [
         ("show_as", "showAs"),
@@ -580,14 +606,11 @@ pub fn ews_event_properties(item: &Element) -> PropertyMap {
         "recurrence",
         Some(recurrence_text(&event["recurrence"])),
     );
-    let attendees: Vec<&str> = ["RequiredAttendees", "OptionalAttendees", "Resources"]
-        .iter()
-        .filter_map(|name| item.child(name))
-        .flat_map(|list| list.children_named("Attendee"))
-        .filter_map(|a| a.path(&["Mailbox", "EmailAddress"]))
-        .map(|e| e.text.as_str())
-        .collect();
-    put(&mut props, "attendees", Some(address_list(attendees)));
+    put(
+        &mut props,
+        "attendees",
+        Some(address_list(attendees(item).iter().map(String::as_str))),
+    );
     props
 }
 
@@ -596,13 +619,18 @@ pub fn graph_event_properties(event: &Value) -> PropertyMap {
     let mut props = PropertyMap::new();
     let string = |field: &str| event[field].as_str().map(str::to_owned);
     put(&mut props, "subject", string("subject"));
-    put(&mut props, "start", graph_utc(&event["start"]));
-    put(&mut props, "end", graph_utc(&event["end"]));
-    put(
-        &mut props,
-        "time_zone",
-        event["originalStartTimeZone"].as_str().map(zone_id),
-    );
+    if event["isAllDay"].as_bool() == Some(true) {
+        put(&mut props, "start", day(&event["start"]));
+        put(&mut props, "end", day(&event["end"]));
+    } else {
+        put(&mut props, "start", graph_utc(&event["start"]));
+        put(&mut props, "end", graph_utc(&event["end"]));
+        put(
+            &mut props,
+            "time_zone",
+            event["originalStartTimeZone"].as_str().map(zone_id),
+        );
+    }
     put(&mut props, "all_day", Some(event["isAllDay"].to_string()));
     put(&mut props, "show_as", string("showAs"));
     put(&mut props, "sensitivity", string("sensitivity"));
@@ -1292,7 +1320,7 @@ pub fn category_properties(name: &str, color: &str, prefix: &str) -> PropertyMap
 
 /// Whether an item would ring a reminder after `now` (Unix seconds): a trial
 /// copy would then ring too, so the trial leaves it out.
-fn rings_later(item: &Element, now: i64) -> bool {
+pub(crate) fn rings_later(item: &Element, now: i64) -> bool {
     if text(item, "ReminderIsSet").as_deref() != Some("true") {
         return false;
     }
@@ -1670,7 +1698,7 @@ mod trial {
             "event" => (
                 EVENT_COMPARED,
                 target
-                    .create_event(container, json)
+                    .create_event(Some(container), json)
                     .and_then(|id| target.get(&format!("/me/events/{}", encode(&id))))
                     .map_err(error)
                     .map(|copy| (ews_event_properties(item), graph_event_properties(&copy))),
@@ -1706,10 +1734,12 @@ mod trial {
     ) -> Copied {
         let error = |e: ecm_graph::Error| e.to_string();
         let photo = client.contact_photo(item).map_err(|e| e.to_string())?;
-        let id = target.create_contact(container, json).map_err(error)?;
+        let id = target
+            .create_contact(Some(container), json)
+            .map_err(error)?;
         if let Some(photo) = &photo {
             target
-                .set_contact_photo(container, &id, photo)
+                .set_contact_photo(Some(container), &id, photo)
                 .map_err(error)?;
         }
         let url = format!(
@@ -1872,7 +1902,8 @@ mod tests {
         "<t:ReminderIsSet>true</t:ReminderIsSet><t:ReminderMinutesBeforeStart>15</t:ReminderMinutesBeforeStart>",
         "<t:Start>2024-05-06T16:30:00Z</t:Start><t:End>2024-05-06T17:30:00Z</t:End><t:IsAllDayEvent>false</t:IsAllDayEvent>",
         "<t:LegacyFreeBusyStatus>WorkingElsewhere</t:LegacyFreeBusyStatus><t:Location>Studio</t:Location>",
-        "<t:RequiredAttendees><t:Attendee><t:Mailbox><t:EmailAddress>Ann@Example.test</t:EmailAddress></t:Mailbox></t:Attendee></t:RequiredAttendees>",
+        "<t:Organizer><t:Mailbox><t:EmailAddress>me@example.test</t:EmailAddress></t:Mailbox></t:Organizer>",
+        "<t:RequiredAttendees><t:Attendee><t:Mailbox><t:EmailAddress>Ann@Example.test</t:EmailAddress></t:Mailbox></t:Attendee><t:Attendee><t:Mailbox><t:EmailAddress>Me@Example.test</t:EmailAddress></t:Mailbox></t:Attendee></t:RequiredAttendees>",
         "<t:Recurrence><t:WeeklyRecurrence><t:Interval>1</t:Interval><t:DaysOfWeek>Monday Thursday</t:DaysOfWeek><t:FirstDayOfWeek>Monday</t:FirstDayOfWeek></t:WeeklyRecurrence>",
         "<t:EndDateRecurrence><t:StartDate>2024-05-06+02:00</t:StartDate><t:EndDate>2024-06-27+02:00</t:EndDate></t:EndDateRecurrence></t:Recurrence>",
         "<t:StartWallClock>2024-05-06T18:30:00+02:00</t:StartWallClock><t:EndWallClock>2024-05-06T19:30:00+02:00</t:EndWallClock>",
@@ -1944,6 +1975,29 @@ mod tests {
         let copy = graph_event_properties(&copy);
         assert!(compare_on(EVENT_COMPARED, &source, &copy).is_empty());
         assert!(!copy.contains_key("attendees"));
+    }
+
+    #[test]
+    fn all_day_events_compare_by_their_days() {
+        let item = element(concat!(
+            "<t:CalendarItem><t:Subject>Ride</t:Subject><t:Start>2026-09-26T22:00:00Z</t:Start><t:End>2026-09-27T22:00:00Z</t:End>",
+            "<t:IsAllDayEvent>true</t:IsAllDayEvent><t:StartWallClock>2026-09-27T00:00:00+02:00</t:StartWallClock>",
+            "<t:EndWallClock>2026-09-28T00:00:00+02:00</t:EndWallClock><t:StartTimeZoneId>Romance Standard Time</t:StartTimeZoneId>",
+            "<t:EndTimeZoneId>Romance Standard Time</t:EndTimeZoneId></t:CalendarItem>"
+        ));
+        let source = ews_event_properties(&item);
+        assert_eq!(source["start"], "2026-09-27");
+        // Graph gives an all-day event's days as they were set, even in UTC.
+        let copy = graph_event_properties(&json!({
+            "subject": "Ride",
+            "isAllDay": true,
+            "start": {"dateTime": "2026-09-27T00:00:00.0000000", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-09-28T00:00:00.0000000", "timeZone": "UTC"},
+            "originalStartTimeZone": "Romance Standard Time",
+            "isReminderOn": false
+        }));
+        assert_eq!(copy["start"], "2026-09-27");
+        assert_eq!(copy["end"], "2026-09-28");
     }
 
     #[test]

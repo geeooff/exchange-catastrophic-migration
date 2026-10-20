@@ -152,6 +152,34 @@ pub enum Action {
         /// The file, base64.
         data: String,
     },
+    /// Create a calendar item, contact, To Do task, inbox rule or category in an
+    /// Outlook.com mailbox (Microsoft Graph) from its JSON resource.
+    CreateGraph {
+        /// `event`, `contact`, `task`, `rule` or `category`.
+        kind: String,
+        /// The calendar, contact folder or To Do list, by name: empty for the
+        /// default one, and for rules and categories.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        to: String,
+        /// Subject or name, for reports.
+        subject: Option<String>,
+        /// The item, as Graph JSON. A rule names its folders by path, after
+        /// `ecm-folder:`.
+        item: String,
+    },
+    /// Set the photo of the contact an earlier `create-graph` step created in an
+    /// Outlook.com mailbox.
+    SetPhoto {
+        /// The step that created the contact; its journal holds the contact id.
+        requires: usize,
+        /// The contact folder, by name: empty for the default one.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        to: String,
+        /// Contact name, for reports.
+        subject: Option<String>,
+        /// The photo, base64.
+        photo: String,
+    },
     /// Set the photo of a target contact.
     ContactPhoto {
         /// Target contact id.
@@ -175,14 +203,16 @@ impl Action {
                 "misplaced" => "move",
                 _ => "quarantine",
             },
-            Action::Create { kind, .. } => match kind.as_str() {
+            Action::Create { kind, .. } | Action::CreateGraph { kind, .. } => match kind.as_str() {
                 "event" => "create-event",
                 "contact" => "create-contact",
                 "task" => "create-task",
                 "note" => "create-note",
+                "rule" => "create-rule",
+                "category" => "create-category",
                 _ => "create",
             },
-            Action::ContactPhoto { .. } => "contact-photo",
+            Action::ContactPhoto { .. } | Action::SetPhoto { .. } => "contact-photo",
             Action::Attach { .. } => "attach",
             Action::CreateRule { .. } => "create-rule",
             Action::DiscardFolder { .. } => "discard-folder",
@@ -617,5 +647,27 @@ mod tests {
             r#"{"action":"attach","requires":3,"name":"a.mp4","content_type":"video/mp4","data":"eA=="}"#
         );
         assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), attach);
+
+        let photo = Action::SetPhoto {
+            requires: 4,
+            to: String::new(),
+            subject: Some("Ann".into()),
+            photo: "eA==".into(),
+        };
+        let json = serde_json::to_string(&photo).unwrap();
+        assert_eq!(
+            json,
+            r#"{"action":"set-photo","requires":4,"subject":"Ann","photo":"eA=="}"#
+        );
+        assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), photo);
+        let rule = Action::CreateGraph {
+            kind: "rule".into(),
+            to: String::new(),
+            subject: Some("Bank".into()),
+            item: "{}".into(),
+        };
+        assert_eq!(rule.kind(), "create-rule");
+        let json = serde_json::to_string(&rule).unwrap();
+        assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), rule);
     }
 }
