@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use ecm_model::{ItemRecord, path};
 use serde::{Deserialize, Serialize};
 
-use crate::{Audit, SourceStatus, TargetRole};
+use crate::{Audit, Defect, SourceStatus, TargetRole};
 
 /// Top-level folder that receives quarantined items, one sub-folder per plan.
 pub const QUARANTINE_FOLDER: &str = "ecm-quarantine";
@@ -332,8 +332,18 @@ pub fn plan(
         if !item.is_message() || skipped_folder {
             continue;
         }
+        // A copy matched only by fingerprint (another Message-ID) may be another
+        // message: one a plan created is then left alone.
+        let by_fingerprint = |copy: usize| {
+            matches!(&audit.target_roles[copy], TargetRole::Copy { defects, .. }
+                if defects.contains(&Defect::MessageIdChanged))
+        };
         let movable = |copy: usize| {
-            at_top(copy) || created(copy) && *status == SourceStatus::Degraded && !kept.contains(&s)
+            at_top(copy)
+                || created(copy)
+                    && *status == SourceStatus::Degraded
+                    && !kept.contains(&s)
+                    && !by_fingerprint(copy)
         };
         if copy_of.get(&s).is_some_and(|&copy| !movable(copy)) {
             continue;
@@ -799,6 +809,71 @@ mod tests {
         let audit = audit(&source, &target, 1000);
         let applied = Applied {
             created: ids(&["t1", "t2"]),
+            ..Default::default()
+        };
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &applied,
+            "r",
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn a_created_copy_goes_to_the_twin_it_matches_and_stays() {
+        // Filed twice in the source, received days apart; one copy, an earlier
+        // plan's, received as the second twin: it is that twin's, sound, and
+        // only the first twin is re-created.
+        let folder = "Archive";
+        let mut first = message("s1", folder, "<1>", 2);
+        first.received = Some(400_000);
+        let second = message("s2", folder, "<1>", 2);
+        let target = vec![message("t1", folder, "<1>", 3)];
+        let source = vec![first, second];
+        let audit = audit(&source, &target, 1_000_000);
+        assert_eq!(
+            audit.source_status,
+            [SourceStatus::Missing, SourceStatus::Ok]
+        );
+        let applied = Applied {
+            created: ids(&["t1"]),
+            ..Default::default()
+        };
+        let actions = plan(
+            &audit,
+            &source,
+            &target,
+            &folders(),
+            &existing(),
+            &applied,
+            "r",
+        );
+        let steps: Vec<&Action> = actions
+            .iter()
+            .filter(|a| !matches!(a, Action::CreateFolder { .. }))
+            .collect();
+        assert!(
+            matches!(&steps[..], [Action::Recreate { source, .. }] if source == "s1"),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_created_copy_matched_only_by_fingerprint_is_left_alone() {
+        // Same subject and send time, another Message-ID: maybe another message.
+        let sent = "Éléments envoyés";
+        let source = vec![message("s1", sent, "<1>", 2)];
+        let mut copy = message("t1", sent, "<other>", 2);
+        copy.subject = Some("<1>".into());
+        let target = vec![copy];
+        let audit = audit(&source, &target, 1000);
+        assert_eq!(audit.source_status, [SourceStatus::Degraded]);
+        let applied = Applied {
+            created: ids(&["t1"]),
             ..Default::default()
         };
         let actions = plan(

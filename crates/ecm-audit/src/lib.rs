@@ -232,20 +232,20 @@ pub fn audit(source: &[ItemRecord], target: &[ItemRecord], cutoff: i64) -> Audit
     // source item gets its share, in order, so that a message filed twice in the
     // source keeps two copies. Items plans rebuild come first, so that a twin in
     // a system folder (Recoverable Items) never takes their copy; then, between
-    // equal shares, the item in the copy's folder. Otherwise a plan would re-create
-    // an item next to its own copy.
+    // equal shares, the item the copy matches best: undamaged, then in its folder
+    // (twins can differ, received days apart). Otherwise a plan would re-create an
+    // item next to its own copy, or replace a sound copy.
     let assign = |sources: &[usize],
                   copy: usize,
                   by_fingerprint: bool,
                   candidates: &mut Vec<Vec<(usize, bool)>>| {
-        let folder = target[copy].folder.to_lowercase();
         let chosen = *sources
             .iter()
             .min_by_key(|&&s| {
                 (
                     !verify::in_scope(&source[s]),
                     candidates[s].len(),
-                    source[s].folder.to_lowercase() != folder,
+                    score(&defects(&source[s], &target[copy], by_fingerprint)),
                 )
             })
             .expect("keys always have a source item");

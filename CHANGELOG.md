@@ -77,6 +77,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- A copy of a message the source holds twice goes to the twin it matches best
+  (twins can be received days apart), and `plan --after` no longer replaces a
+  copy an earlier plan created when it matched its source only by fingerprint
+  (another Message-ID: maybe another message). Both made a plan quarantine sound
+  copies.
 - A debug build no longer overflows its stack while reading its arguments: `ecm`
   runs its command on a thread with a larger stack.
 - Events and contacts read from Outlook.com are read again by id, like
