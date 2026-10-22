@@ -23,8 +23,8 @@ to what can be migrated. Milestones: [plan.md](plan.md#7-milestones).
 | Damaged copies, replaced and quarantined | ✅[^9] | 🟡[^10] | ✅ `ecm plan --after` | ✗ | ⏳ M7 | ⏳ M7 |
 | Folders | ✅ | ✅ | ✅ | ✗ | ⏳ M7 | ⏳ M7 |
 | Calendar | 🟡 `ecm plan-pim --pst`[^23] | 🟡 `ecm plan-graph-pim --pst`[^19][^23] | 🟡 `ecm plan-pim`[^11] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^19] |
-| Contacts | 🟡 `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^23] | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
-| Contact photos | 🟡 `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^20] | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
+| Contacts | ✅ `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^23] | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
+| Contact photos | ✅ `ecm plan-pim --pst` | ✅ `ecm plan-graph-pim --pst`[^20] | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
 | Tasks | 🟡 `ecm plan-pim --pst`[^25] | 🟡 `ecm plan-graph-pim --pst`[^25] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
 | Sticky notes | ✅ `ecm plan-notes` | ⏳ M9b[^13] | ✗[^13] | ✗ | ⏳ M7 | ⏳ M9b[^13] |
 | Inbox rules | ✗[^14] | ✗[^14] | 🟡 `ecm plan-rules`[^15] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^22] |
@@ -83,8 +83,10 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     trial of 12 items into Outlook.com, all equal to the PST. Series exceptions
     are listed, not copied; contact groups are not copied. `outlook-pst` 1.2
     cannot read items without a sub-node tree: they are listed.
-[^24]: Planned and checked against a real Exchange mailbox, read-only; the trial
-    copy into `ecm-test` folders (`--test`, created with their class) is still to
-    run. Meetings keep their attendees only when the user organized them; no
-    invitation is sent.
+[^24]: Tested on a PST of 539 calendar items and 166 contacts copied into the
+    `ecm-test` folders of an Exchange 2019 mailbox (`--test`, created with their
+    class): 531 calendar items and 165 contacts equal to the PST, photos included.
+    Exchange rebuilds the display name and file-as of a contact from its name's
+    parts when they disagree (1 contact). Meetings keep their attendees only when
+    the user organized them; no invitation is sent.
 [^25]: Untested: the test PSTs had no task readable.

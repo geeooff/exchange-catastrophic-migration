@@ -301,8 +301,12 @@ they are. Same method: a fidelity test first, then plans, then a check.
 6. **Into Exchange**: `ecm plan-pim --pst` writes the items back as EWS
    `CreateItem` XML in schema order, times in their zone, each photo a
    `contact-photo` step after its contact; `--test` writes into `ecm-test`
-   folders created with their class. `ecm check-pim` compares them. Read-only
-   against a real mailbox whose calendar and contacts came from Outlook.com: of
+   folders created with their class. `ecm check-pim` compares them. A full run
+   into the `ecm-test` folders of an Exchange 2019 mailbox: 531 calendar items
+   (8 left out, their reminder would ring) and 166 contacts with 27 photos, 726
+   steps, none failed; 531 calendar items and 165 contacts equal to the PST, the
+   last one renamed by Exchange from its name's parts. Read-only against the
+   same mailbox's own folders, whose calendar and contacts came from Outlook.com: of
    539 calendar items, 268 equal, 236 missing (217 public holidays Outlook had
    added, 15 yearly birthdays Outlook.com keeps in a separate calendar), the
    others changed since; of 166 contacts, 81 equal and 26 missing. What it
@@ -315,7 +319,14 @@ they are. Same method: a fidelity test first, then plans, then a check.
      such events over two days;
    - bodies kept only as RTF wrote accents as raw bytes, which `ecm-pst` read
      as UTF-8: fixed for messages too. HTML bodies, plain or encapsulated in
-     RTF, can be UTF-8 whatever code page the item names.
+     RTF, can be UTF-8 whatever code page the item names;
+   - Exchange refuses a class on a typed folder (`CalendarFolder`…) and
+     rebuilds a contact's display name from its name's parts when they
+     disagree; a company's card has no display name, so contacts are also
+     matched by file-as, company and mobile phone.
+
+   Left for M10: series exceptions (the PSTs at hand had none) and tasks (none
+   readable).
 7. **Series exceptions**, for both targets, last: the series is created, then
    each modified occurrence of the copy updated and each deleted occurrence of the
    copy removed. Only occurrences of a series `ecm` has just created are removed.
