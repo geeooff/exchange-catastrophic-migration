@@ -217,6 +217,7 @@ pub fn plan_contact_photos_command(
             Some(target) if target.has_picture => {}
             Some(target) => actions.push(Action::ContactPhoto {
                 item: target.id.clone(),
+                requires: None,
                 subject: contact["displayName"].as_str().map(str::to_owned),
                 photo: base64::engine::general_purpose::STANDARD.encode(photo),
             }),
@@ -295,7 +296,7 @@ fn graph_time(value: &Value) -> Option<i64> {
 
 /// The Windows time zone id EWS needs for a Graph time zone name, when known.
 /// UTC and custom zones give `None`: times then stay in UTC.
-fn windows_zone(name: &str) -> Option<String> {
+pub(crate) fn windows_zone(name: &str) -> Option<String> {
     let name = name.trim();
     if name.is_empty() || name.eq_ignore_ascii_case("utc") || name.starts_with("tzone://") {
         return None;

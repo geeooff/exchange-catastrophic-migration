@@ -320,6 +320,20 @@ pub(crate) fn collapse_spaces(text: &str) -> String {
 }
 
 /// Decodes HTML character references: the common named ones and numeric ones.
+/// The HTML 4 names of the characters U+00A0 to U+00FF, in order.
+const LATIN1_ENTITIES: [&str; 96] = [
+    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf",
+    "laquo", "not", "shy", "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro",
+    "para", "middot", "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest",
+    "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil", "Egrave", "Eacute",
+    "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH", "Ntilde", "Ograve", "Oacute",
+    "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute",
+    "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil",
+    "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde",
+    "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc",
+    "uuml", "yacute", "thorn", "yuml",
+];
+
 fn decode_entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -335,6 +349,22 @@ fn decode_entities(text: &str) -> String {
                 "gt" => Some('>'),
                 "quot" => Some('"'),
                 "apos" => Some('\''),
+                "euro" => Some('€'),
+                "oelig" => Some('œ'),
+                "OElig" => Some('Œ'),
+                "ndash" => Some('–'),
+                "mdash" => Some('—'),
+                "lsquo" => Some('‘'),
+                "rsquo" => Some('’'),
+                "ldquo" => Some('“'),
+                "rdquo" => Some('”'),
+                "hellip" => Some('…'),
+                "bull" => Some('•'),
+                "trade" => Some('™'),
+                _ if LATIN1_ENTITIES.contains(&name) => LATIN1_ENTITIES
+                    .iter()
+                    .position(|n| *n == name)
+                    .and_then(|i| char::from_u32(0xA0 + i as u32)),
                 _ => match name.strip_prefix('#') {
                     Some(hex) if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16)
                         .ok()
@@ -641,6 +671,14 @@ mod tests {
                 "missing gone.doc",
                 "extra new.png"
             ]
+        );
+    }
+
+    #[test]
+    fn decodes_named_and_numbered_entities() {
+        assert_eq!(
+            html_text(b"<p>Saint-Exup&eacute;ry &agrave; 18&nbsp;h &ndash; 5&euro; &#233;t&#xE9; &bogus; &amp;</p>"),
+            "Saint-Exupéry à 18 h – 5€ été &bogus; &"
         );
     }
 

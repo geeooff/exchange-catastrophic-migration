@@ -1,5 +1,6 @@
 //! `ecm fidelity-graph-pim`: copy a few calendar items, contacts, tasks, inbox
-//! rules and categories of an Exchange mailbox, read over EWS, into test
+//! rules and categories of an Exchange mailbox, read over EWS (or calendar
+//! items, contacts and tasks of a PST file, milestone M10), into test
 //! containers of a mailbox reached through Microsoft Graph, read each copy back
 //! and compare it with its source property by property (milestone M9b).
 //!
@@ -1450,7 +1451,9 @@ mod trial {
 
     use super::*;
     use crate::{
-        EwsArgs, audit_cmd::GraphArgs, connect, fidelity_cmd::TEST_FOLDER,
+        audit_cmd::GraphArgs,
+        fidelity_cmd::TEST_FOLDER,
+        graph_pim_plan_cmd::{PimKind, PimOptions, PimSource, photo_of, read_any},
         graph_plan_cmd::graph_folder_map,
     };
 
@@ -1485,31 +1488,38 @@ mod trial {
         }
     }
 
-    /// Copies a few items of each type from the Exchange mailbox into the
-    /// `ecm-test` containers of the Graph mailbox, and compares each copy with
-    /// its source: at least `count`, more until every property the source has
-    /// shows in one of them (categories: `count`). With `dry_run`, only prints
-    /// what it would create.
+    /// Copies a few items of each type from the source into the `ecm-test`
+    /// containers of the Graph mailbox, and compares each copy with its source:
+    /// at least `count`, more until every property the source has shows in one
+    /// of them (categories: `count`). With `dry_run`, only prints what it would
+    /// create.
     pub fn fidelity_graph_pim(
-        ews: &EwsArgs,
+        from: &PimSource,
         graph: &GraphArgs,
         count: usize,
         dry_run: bool,
     ) -> Result<(), String> {
-        let client = connect(ews)?;
+        // Every item, cancelled ones left out: those ringing later are left out
+        // below, saying how many.
+        let (mut source, client) = read_any(
+            from,
+            PimOptions {
+                test: false,
+                only: &[PimKind::Event, PimKind::Contact, PimKind::Task],
+            },
+        )?;
+        for line in &source.left_out {
+            println!("Left out: {line}");
+        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let mut kinds = Vec::new();
-        for (name, distinguished) in [
-            ("event", "calendar"),
-            ("contact", "contacts"),
-            ("task", "tasks"),
+        for (name, distinguished, all) in [
+            ("event", "calendar", std::mem::take(&mut source.events)),
+            ("contact", "contacts", std::mem::take(&mut source.contacts)),
+            ("task", "tasks", std::mem::take(&mut source.tasks)),
         ] {
-            let folder = client
-                .get_distinguished_folder(distinguished)
-                .map_err(|e| e.to_string())?;
-            let all = client.full_items(&folder.id).map_err(|e| e.to_string())?;
             let (ringing, items): (Vec<Element>, Vec<Element>) = all
                 .into_iter()
                 .partition(|item| name != "contact" && rings_later(item, now));
@@ -1549,7 +1559,11 @@ mod trial {
                 items: picked,
             });
         }
-        let rules = client.inbox_rule_elements().map_err(|e| e.to_string())?;
+        // A PST gives no rules or categories.
+        let rules = match &client {
+            Some(client) => client.inbox_rule_elements().map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        };
         let features: Vec<BTreeSet<String>> = rules
             .iter()
             .map(|rule| rule_features(&graph_rule(rule, &mut |id| Some(id.to_owned())).0))
@@ -1564,20 +1578,26 @@ mod trial {
             .flat_map(|kind| &kind.items)
             .flat_map(|item| strings(item, "Categories"))
             .collect();
-        let all_categories = client.master_categories().map_err(|e| e.to_string())?;
+        let all_categories = match &client {
+            Some(client) => client.master_categories().map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        };
         let categories = pick_categories(&all_categories, &used, count);
         println!(
             "categories: {}, {} picked",
             all_categories.len(),
             categories.len()
         );
-        let source_paths: HashMap<String, String> = client
-            .folder_tree("msgfolderroot")
-            .map_err(|e| e.to_string())?
-            .with_paths()
-            .into_iter()
-            .map(|(path, folder)| (folder.id.clone(), path))
-            .collect();
+        let source_paths: HashMap<String, String> = match &client {
+            Some(client) => client
+                .folder_tree("msgfolderroot")
+                .map_err(|e| e.to_string())?
+                .with_paths()
+                .into_iter()
+                .map(|(path, folder)| (folder.id.clone(), path))
+                .collect(),
+            None => HashMap::new(),
+        };
 
         if dry_run {
             for kind in &kinds {
@@ -1640,7 +1660,14 @@ mod trial {
                     kind.name,
                     text(item, "Subject").unwrap_or_default()
                 );
-                let (names, result) = copy(&client, &target, kind.name, &container, item, &json);
+                let (names, result) = copy(
+                    &|item| photo_of(client.as_ref(), item),
+                    &target,
+                    kind.name,
+                    &container,
+                    item,
+                    &json,
+                );
                 tally.record(names, result);
                 for line in left_out {
                     println!("  not copied: {line}");
@@ -1684,9 +1711,12 @@ mod trial {
 
     type Copied = Result<(PropertyMap, PropertyMap), String>;
 
+    /// Reads a source contact's photo.
+    type Photo<'a> = dyn Fn(&Element) -> Result<Option<Vec<u8>>, String> + 'a;
+
     /// Creates one item and reads it back: compared names, and source and copy.
-    fn copy<E: ecm_ews::Transport, G: ecm_graph::Transport>(
-        client: &ecm_ews::EwsClient<E>,
+    fn copy<G: ecm_graph::Transport>(
+        photo: &Photo,
         target: &ecm_graph::GraphClient<G>,
         kind: &str,
         container: &str,
@@ -1705,7 +1735,7 @@ mod trial {
             ),
             "contact" => (
                 CONTACT_COMPARED,
-                copy_contact(client, target, container, item, json),
+                copy_contact(photo, target, container, item, json),
             ),
             _ => (
                 TASK_COMPARED,
@@ -1725,15 +1755,15 @@ mod trial {
     }
 
     /// Creates a contact and its photo, and reads them back.
-    fn copy_contact<E: ecm_ews::Transport, G: ecm_graph::Transport>(
-        client: &ecm_ews::EwsClient<E>,
+    fn copy_contact<G: ecm_graph::Transport>(
+        photo: &Photo,
         target: &ecm_graph::GraphClient<G>,
         container: &str,
         item: &Element,
         json: &Value,
     ) -> Copied {
         let error = |e: ecm_graph::Error| e.to_string();
-        let photo = client.contact_photo(item).map_err(|e| e.to_string())?;
+        let photo = photo(item)?;
         let id = target
             .create_contact(Some(container), json)
             .map_err(error)?;
@@ -1873,7 +1903,7 @@ mod trial {
 
 #[cfg(not(windows))]
 pub fn fidelity_graph_pim(
-    _: &crate::EwsArgs,
+    _: &crate::graph_pim_plan_cmd::PimSource,
     _: &crate::audit_cmd::GraphArgs,
     _: usize,
     _: bool,

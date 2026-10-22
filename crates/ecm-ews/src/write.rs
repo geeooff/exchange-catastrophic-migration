@@ -126,9 +126,29 @@ impl<T: Transport> EwsClient<T> {
 
     /// Creates a mail folder `name` under the folder `parent_id` and returns its id.
     pub fn create_folder(&self, parent_id: &str, name: &str) -> Result<String> {
+        self.create_folder_of_class(parent_id, name, "IPF.Note")
+    }
+
+    /// Creates a folder `name` of the class `class` (`IPF.Appointment` for a
+    /// calendar, `IPF.Contact`, `IPF.Task`) under the folder `parent_id` and
+    /// returns its id.
+    pub fn create_folder_of_class(
+        &self,
+        parent_id: &str,
+        name: &str,
+        class: &str,
+    ) -> Result<String> {
+        // Typed folders are `CalendarFolder`, `ContactsFolder`, `TasksFolder`.
+        let element = match class {
+            "IPF.Appointment" => "CalendarFolder",
+            "IPF.Contact" => "ContactsFolder",
+            "IPF.Task" => "TasksFolder",
+            _ => "Folder",
+        };
         let body = format!(
-            r#"<m:CreateFolder><m:ParentFolderId><t:FolderId Id="{}"/></m:ParentFolderId><m:Folders><t:Folder><t:FolderClass>IPF.Note</t:FolderClass><t:DisplayName>{}</t:DisplayName></t:Folder></m:Folders></m:CreateFolder>"#,
+            r#"<m:CreateFolder><m:ParentFolderId><t:FolderId Id="{}"/></m:ParentFolderId><m:Folders><t:{element}><t:FolderClass>{}</t:FolderClass><t:DisplayName>{}</t:DisplayName></t:{element}></m:Folders></m:CreateFolder>"#,
             escape(parent_id),
+            escape(class),
             escape(name)
         );
         let message = self

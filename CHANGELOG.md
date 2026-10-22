@@ -6,6 +6,30 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+
+- PST files as a source for calendar items, contacts and their photos, and
+  tasks. Every property is read, named ones through the PST's own map, with
+  series (their pattern, range and exceptions), time zones and attendees.
+  `--pst FILE` reads them for `fidelity-graph-pim`, `plan-graph-pim` and
+  `check-graph-pim` (into Outlook.com), and for `plan-pim` (into an Exchange
+  mailbox). Folders under Deleted Items are left out and listed; `--folder PATH`
+  names the folders to read.
+- `plan-pim --pst --test`: into `ecm-test` folders under the calendar, contacts
+  and tasks folders, created with their class. Contact photos follow their
+  contact (`contact-photo` steps that wait for it).
+- `check-pim`: compare a PST's calendar items, contacts and tasks with their
+  copies in an Exchange mailbox, property by property.
+
+### Fixed
+
+- A body kept only as RTF that writes accents as raw bytes (as Word does) was
+  read as if they were UTF-8: "AnaÃ¯s" for "Anaïs", in rebuilt messages too.
+- An HTML body, plain or encapsulated in RTF, that is UTF-8 while its item names
+  another code page is read as UTF-8.
+- Bodies compared by what they show decode the named HTML entities (`&eacute;`,
+  `&euro;`…).
+
 ## [0.2.0] - 2026-10-20
 
 Microsoft Graph as a target. An Outlook.com mailbox was repaired from a PST, and
