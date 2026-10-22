@@ -17,6 +17,8 @@ mod graph_plan_cmd;
 mod notes_cmd;
 mod pim_cmd;
 mod plan_cmd;
+mod pst_pim;
+mod pst_pim_cmd;
 mod pst_plan_cmd;
 mod rules_cmd;
 mod verify_cmd;
@@ -148,14 +150,14 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work: Option<PathBuf>,
     },
-    /// Copy a few calendar items, contacts and tasks of an Exchange mailbox into
-    /// the `ecm-test` calendar, contact folder and To Do list of an Outlook.com
-    /// mailbox through Microsoft Graph, read each copy back and compare it with
-    /// its source. Only creates items, only there; events go without their
-    /// attendees, so no invitation is sent.
+    /// Copy a few calendar items, contacts and tasks of an Exchange mailbox or a
+    /// PST file into the `ecm-test` calendar, contact folder and To Do list of an
+    /// Outlook.com mailbox through Microsoft Graph, read each copy back and
+    /// compare it with its source. Only creates items, only there; events go
+    /// without their attendees, so no invitation is sent.
     FidelityGraphPim {
         #[command(flatten)]
-        ews: EwsArgs,
+        source: PimSourceArgs,
         /// Client id of the Microsoft Graph app registration.
         #[arg(long, value_name = "ID")]
         client_id: String,
@@ -194,20 +196,64 @@ enum Command {
         after: Vec<PathBuf>,
     },
     /// Write a plan that copies the Outlook.com calendar, contacts and To Do tasks
+    /// (or, with `--pst`, a PST's calendar, contacts and their photos, and tasks)
     /// into the target's default folders, leaving out what they already hold.
     /// Only reads.
     PlanPim {
         #[command(flatten)]
         ews: EwsArgs,
         /// Client id of the Microsoft Graph app registration.
-        #[arg(long, value_name = "ID")]
-        client_id: String,
+        #[arg(
+            long,
+            value_name = "ID",
+            required_unless_present = "pst",
+            conflicts_with = "pst"
+        )]
+        client_id: Option<String>,
         /// Sign-in authority for Graph.
         #[arg(long, value_name = "TENANT", default_value = "consumers")]
         tenant: String,
+        /// Copy from this PST file instead of Outlook.com. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: Option<PathBuf>,
+        /// With `--pst`, read this folder (a path such as `Deleted Items/Calendar`)
+        /// instead of the calendar, contact and task folders outside Deleted
+        /// Items. Repeat for several.
+        #[arg(long = "folder", value_name = "PATH", requires = "pst")]
+        folders: Vec<String>,
+        /// With `--pst`: into `ecm-test` folders under the calendar, contacts and
+        /// tasks folders, created when missing, leaving out items whose reminder
+        /// would ring later.
+        #[arg(long, requires = "pst")]
+        test: bool,
+        /// With `--pst`: only this item type (`event`, `contact`, `task`). Repeat
+        /// for several.
+        #[arg(long, value_enum, value_name = "TYPE", requires = "pst")]
+        only: Vec<graph_pim_plan_cmd::PimKind>,
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
+    },
+    /// Compare each calendar item, contact and task of a PST with its copy in the
+    /// target, property by property, and list those that differ or have no
+    /// copy. Only reads.
+    CheckPim {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// PST file the copies were made from. It is never written to.
+        #[arg(long, value_name = "FILE")]
+        pst: PathBuf,
+        /// Read this folder of the PST (a path such as `Deleted Items/Calendar`)
+        /// instead of its calendar, contact and task folders outside Deleted
+        /// Items. Repeat for several.
+        #[arg(long = "folder", value_name = "PATH")]
+        folders: Vec<String>,
+        /// Check the `ecm-test` folders `plan-pim --pst --test` wrote into.
+        #[arg(long)]
+        test: bool,
+        /// Only this item type (`event`, `contact`, `task`). Repeat for several.
+        #[arg(long, value_enum, value_name = "TYPE")]
+        only: Vec<graph_pim_plan_cmd::PimKind>,
     },
     /// Write a plan that gives the target's contacts the photos their
     /// Outlook.com counterparts have (matched by e-mail address, then name).
@@ -425,13 +471,14 @@ enum Command {
         dry_run: bool,
     },
     /// Write a plan that copies the calendar, contacts and their photos, tasks,
-    /// inbox rules and categories of an Exchange mailbox into an Outlook.com
-    /// mailbox through Microsoft Graph, leaving out what it already holds; run it
-    /// with `apply-graph`. Events go without their attendees, whom Graph would
-    /// invite. Only reads both mailboxes.
+    /// inbox rules and categories of an Exchange mailbox (or the calendar,
+    /// contacts and tasks of a PST file) into an Outlook.com mailbox through
+    /// Microsoft Graph, leaving out what it already holds; run it with
+    /// `apply-graph`. Events go without their attendees, whom Graph would invite.
+    /// Only reads the source and the target.
     PlanGraphPim {
         #[command(flatten)]
-        ews: EwsArgs,
+        source: PimSourceArgs,
         /// Client id of the Microsoft Graph app registration.
         #[arg(long, value_name = "ID")]
         client_id: String,
@@ -451,11 +498,12 @@ enum Command {
         out: PathBuf,
     },
     /// Compare each calendar item, contact, task, inbox rule and category of an
-    /// Exchange mailbox with its copy in an Outlook.com mailbox, property by
-    /// property, and list those that differ or have no copy. Only reads.
+    /// Exchange mailbox (or calendar item, contact and task of a PST file) with
+    /// its copy in an Outlook.com mailbox, property by property, and list those
+    /// that differ or have no copy. Only reads.
     CheckGraphPim {
         #[command(flatten)]
-        ews: EwsArgs,
+        source: PimSourceArgs,
         /// Client id of the Microsoft Graph app registration.
         #[arg(long, value_name = "ID")]
         client_id: String,
@@ -611,6 +659,49 @@ struct EwsArgs {
     credential: Option<String>,
 }
 
+/// Where calendar items, contacts and tasks come from: an Exchange mailbox over
+/// EWS, or a PST file.
+#[derive(Debug, clap::Args)]
+struct PimSourceArgs {
+    /// EWS endpoint of the source mailbox, e.g.
+    /// `https://mail.example.com/EWS/Exchange.asmx`
+    #[arg(
+        long,
+        value_name = "URL",
+        required_unless_present = "pst",
+        conflicts_with = "pst"
+    )]
+    ews: Option<String>,
+    /// Generic credential in the Windows Credential Manager for `--ews`.
+    /// Defaults to `ecm:HOST`.
+    #[arg(long, value_name = "NAME", requires = "ews")]
+    credential: Option<String>,
+    /// PST file to read instead: its calendar, contacts and tasks (not its inbox
+    /// rules or categories). It is never written to.
+    #[arg(long, value_name = "FILE")]
+    pst: Option<PathBuf>,
+    /// With `--pst`, read this folder (a path such as `Deleted Items/Calendar`)
+    /// instead of the calendar, contact and task folders outside Deleted Items.
+    /// Repeat for several.
+    #[arg(long = "folder", value_name = "PATH", requires = "pst")]
+    folders: Vec<String>,
+}
+
+impl From<PimSourceArgs> for graph_pim_plan_cmd::PimSource {
+    fn from(args: PimSourceArgs) -> Self {
+        match (args.pst, args.ews) {
+            (Some(path), _) => Self::Pst {
+                path,
+                folders: args.folders,
+            },
+            (None, ews) => Self::Ews(EwsArgs {
+                ews: ews.unwrap_or_default(),
+                credential: args.credential,
+            }),
+        }
+    }
+}
+
 /// Stack of the thread commands run on. The main thread's (1 MB on Windows) is
 /// too small for the command dispatch in debug builds.
 const STACK_SIZE: usize = 16 * 1024 * 1024;
@@ -703,13 +794,13 @@ fn run() -> ExitCode {
             ))
         }
         Command::FidelityGraphPim {
-            ews,
+            source,
             client_id,
             tenant,
             count,
             dry_run,
         } => report(graph_pim_cmd::fidelity_graph_pim(
-            &ews,
+            &source.into(),
             &audit_cmd::GraphArgs { client_id, tenant },
             count,
             dry_run,
@@ -794,27 +885,27 @@ fn run() -> ExitCode {
             dry_run,
         )),
         Command::PlanGraphPim {
-            ews,
+            source,
             client_id,
             tenant,
             test,
             only,
             out,
         } => report(graph_pim_plan_cmd::plan_graph_pim_command(
-            &ews,
+            &source.into(),
             &audit_cmd::GraphArgs { client_id, tenant },
             graph_pim_plan_cmd::PimOptions { test, only: &only },
             &out,
         )),
         Command::CheckGraphPim {
-            ews,
+            source,
             client_id,
             tenant,
             test,
             only,
             plans,
         } => report(graph_pim_plan_cmd::check_graph_pim_command(
-            &ews,
+            &source.into(),
             &audit_cmd::GraphArgs { client_id, tenant },
             graph_pim_plan_cmd::PimOptions { test, only: &only },
             &plans,
@@ -841,11 +932,37 @@ fn run() -> ExitCode {
             ews,
             client_id,
             tenant,
+            pst,
+            folders,
+            test,
+            only,
             out,
-        } => report(pim_cmd::plan_pim_command(
+        } => report(match pst {
+            Some(pst) => pst_pim_cmd::plan_pst_pim_command(
+                &ews,
+                &graph_pim_plan_cmd::PimSource::Pst { path: pst, folders },
+                graph_pim_plan_cmd::PimOptions { test, only: &only },
+                &out,
+            ),
+            None => pim_cmd::plan_pim_command(
+                &ews,
+                &audit_cmd::GraphArgs {
+                    client_id: client_id.unwrap_or_default(),
+                    tenant,
+                },
+                &out,
+            ),
+        }),
+        Command::CheckPim {
+            ews,
+            pst,
+            folders,
+            test,
+            only,
+        } => report(pst_pim_cmd::check_pim_command(
             &ews,
-            &audit_cmd::GraphArgs { client_id, tenant },
-            &out,
+            &graph_pim_plan_cmd::PimSource::Pst { path: pst, folders },
+            graph_pim_plan_cmd::PimOptions { test, only: &only },
         )),
         Command::PlanContactPhotos {
             ews,

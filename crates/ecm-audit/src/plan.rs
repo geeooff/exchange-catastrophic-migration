@@ -57,6 +57,15 @@ pub enum Action {
         /// Target folder path.
         path: String,
     },
+    /// Create a folder of a given class at this target path: a calendar,
+    /// contact or task folder (`IPF.Appointment`, `IPF.Contact`, `IPF.Task`),
+    /// the test containers of a calendar and contacts plan.
+    CreateTypedFolder {
+        /// Target folder path.
+        path: String,
+        /// Folder class.
+        class: String,
+    },
     /// Re-create a source item in a target folder.
     Recreate {
         /// Source item key (e.g. a Graph message id).
@@ -182,8 +191,13 @@ pub enum Action {
     },
     /// Set the photo of a target contact.
     ContactPhoto {
-        /// Target contact id.
+        /// Target contact id; empty with `requires`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         item: String,
+        /// The step that created the contact, when the plan creates it; its
+        /// journal holds the contact id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requires: Option<usize>,
         /// Contact name, for reports.
         subject: Option<String>,
         /// The photo, base64.
@@ -195,7 +209,7 @@ impl Action {
     /// Short name, for counts.
     pub fn kind(&self) -> &'static str {
         match self {
-            Action::CreateFolder { .. } => "create-folder",
+            Action::CreateFolder { .. } | Action::CreateTypedFolder { .. } => "create-folder",
             Action::Recreate { .. }
             | Action::RecreateMime { .. }
             | Action::CreateMessage { .. } => "recreate",

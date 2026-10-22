@@ -40,10 +40,13 @@ journals each step and resumes where it stopped.
      mailbox through Microsoft Graph, and `ecm apply-graph` runs the plan.
    - `ecm plan-pim`, `ecm plan-contact-photos`, `ecm plan-notes`, `ecm plan-rules`:
      calendar (recurrences, time zones), contacts and their photos, To Do tasks,
-     sticky notes and inbox rules.
-   - `ecm plan-graph-pim`: the other way, from an Exchange mailbox into Outlook.com
-     through Graph: calendar, contacts and their photos, tasks, inbox rules and
-     categories, run with `ecm apply-graph` and checked with `ecm check-graph-pim`.
+     sticky notes and inbox rules. With `--pst`, `ecm plan-pim` copies a PST's
+     calendar, contacts and their photos, and tasks instead, checked with
+     `ecm check-pim`.
+   - `ecm plan-graph-pim`: the other way, from an Exchange mailbox or a PST
+     (`--pst`) into Outlook.com through Graph: calendar, contacts and their photos,
+     tasks, inbox rules and categories, run with `ecm apply-graph` and checked with
+     `ecm check-graph-pim`.
    - `ecm plan-park`: move the reviewed `ecm-unmatched` folder into quarantine.
    - `ecm plan-discard [--run <name>]`: once you are sure, move quarantine run folders
      into Deleted Items, which you empty yourself. `ecm` never deletes anything.

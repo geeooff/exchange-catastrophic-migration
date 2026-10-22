@@ -29,8 +29,15 @@ pub fn body(compressed: &[u8]) -> Option<Body> {
     if compressed.len() < 16 {
         return None;
     }
-    let rtf = compressed_rtf::decompress_rtf(compressed).ok()?;
-    let rtf = rtf.as_bytes();
+    // `decompress_rtf` gives each byte as the character of the same number:
+    // back to bytes, or bytes beyond ASCII written raw in the RTF would be
+    // read as their UTF-8 encoding.
+    let rtf: Vec<u8> = compressed_rtf::decompress_rtf(compressed)
+        .ok()?
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    let rtf = rtf.as_slice();
     if !rtf.starts_with(b"{\\rtf1") {
         return None;
     }
@@ -187,6 +194,9 @@ struct Out {
     text: String,
     bytes: Vec<u8>,
     code_page: u32,
+    /// Encapsulated HTML: its bytes are the original HTML's, often UTF-8
+    /// whatever code page the RTF names.
+    html: bool,
 }
 
 impl Out {
@@ -205,11 +215,50 @@ impl Out {
 
     fn flush(&mut self) {
         if !self.bytes.is_empty() {
-            let (text, _, _) = encoding(self.code_page).decode(&self.bytes);
-            self.text.push_str(&text);
+            if self.html {
+                self.text
+                    .push_str(&decode_html(&self.bytes, self.code_page));
+            } else {
+                let (text, _, _) = encoding(self.code_page).decode(&self.bytes);
+                self.text.push_str(&text);
+            }
             self.bytes.clear();
         }
     }
+}
+
+/// HTML bytes said to be in `code_page`: its UTF-8 sequences read as UTF-8, the
+/// other bytes in the code page, when it has one byte per character. An HTML
+/// body often is UTF-8 whatever code page its item names, and Windows-1252
+/// text almost never holds a valid UTF-8 sequence.
+pub(crate) fn decode_html(bytes: &[u8], code_page: u32) -> String {
+    let encoding = encoding(code_page);
+    if encoding == encoding_rs::UTF_8 || !encoding.is_single_byte() {
+        return encoding.decode(bytes).0.into_owned();
+    }
+    let mut out = String::with_capacity(bytes.len());
+    let mut run = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let length = match bytes[i] {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => 0,
+        };
+        if let Some(Ok(text)) = bytes.get(i..i + length).map(std::str::from_utf8)
+            && length > 0
+        {
+            out.push_str(&encoding.decode_without_bom_handling(&bytes[run..i]).0);
+            out.push_str(text);
+            i += length;
+            run = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&encoding.decode_without_bom_handling(&bytes[run..]).0);
+    out
 }
 
 /// The encoding of a Windows code page; Western European when unknown.
@@ -264,6 +313,7 @@ fn convert(rtf: &[u8], kind: Kind) -> String {
         text: String::new(),
         bytes: Vec::new(),
         code_page: 1252,
+        html: kind == Kind::Html,
     };
     let mut default_code_page = 1252;
     let mut font_code_pages: HashMap<i32, u32> = HashMap::new();
@@ -409,6 +459,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_utf8_bytes_in_encapsulated_html() {
+        let rtf = br#"{\rtf1\ansi\ansicpg1252\fromhtml1 {\*\htmltag64 <p>}PARIS \'c3\'a0 MADRID confirm\'c3\'a9{\*\htmltag72 </p>}{\*\htmltag64 <p>}Caf\'e9{\*\htmltag72 </p>}}"#;
+        assert_eq!(
+            convert(rtf, Kind::Html),
+            "<p>PARIS \u{e0} MADRID confirm\u{e9}</p><p>Caf\u{e9}</p>"
+        );
+    }
+
+    #[test]
     fn de_encapsulates_html() {
         let rtf = br#"{\rtf1\ansi\ansicpg1252\fromhtml1 \deff0{\fonttbl
 {\f0\fswiss Arial;}}
@@ -444,5 +503,9 @@ mod tests {
         let compressed = compressed_rtf::compress_rtf(rtf).unwrap();
         assert_eq!(body(&compressed), Some(Body::Text("Salut\r\n".into())));
         assert_eq!(body(b"not rtf"), None);
+        // A byte beyond ASCII written raw, as Word does: Windows-1252 0xEF.
+        let rtf = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0 Calibri;}}\\pard\\f0 Ana\u{ef}s\\par}";
+        let compressed = compressed_rtf::compress_rtf(rtf).unwrap();
+        assert_eq!(body(&compressed), Some(Body::Text("Ana\u{ef}s\r\n".into())));
     }
 }

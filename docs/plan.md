@@ -207,7 +207,7 @@ property.
 | M8 ✅ | Release 0.1 | Documentation, binaries for Windows x64 |
 | M9 ✅ | Microsoft Graph as a target for messages (Outlook.com): `fidelity-graph`, `check-content --outlook-com`, `plan-pst --outlook-com` and `apply-graph` | A real Outlook.com mailbox repaired from a PST, checked with `check-content` |
 | M9b | Microsoft Graph as a target for every other item type: calendar, contacts and photos, To Do tasks, inbox rules, categories, notes. Source: an Exchange mailbox read over EWS (the part of M7 these types need). See [Graph as a target](#graph-as-a-target-for-every-item-type) | Each type, copied into test containers of a real Outlook.com mailbox, matches its source on every compared property; what Graph cannot do is documented |
-| M10 | PST as a source for calendar items (recurrences and their exceptions, [MS-OXOCAL]), contacts and their photos, and tasks | Each type, copied from a PST to EWS and to Graph, matches the PST on every compared property |
+| M10 | PST as a source for calendar items (recurrences and their exceptions, [MS-OXOCAL]), contacts and their photos, and tasks. See [PST as a source](#pst-as-a-source-for-calendar-items-contacts-and-tasks) | Each type, copied from a PST to EWS and to Graph, matches the PST on every compared property |
 
 ### Graph as a target for every item type
 
@@ -260,6 +260,65 @@ Milestone M9b, after messages (M9). Same method: a fidelity test first, then pla
    - Graph keeps an all-day event as days, in UTC: such events compare by day.
 
    Left for M9b: series exceptions, tasks and notes (the test source had none).
+
+### PST as a source for calendar items, contacts and tasks
+
+Milestone M10. A PST item is turned into what EWS gives for the same item (an
+element shaped like a `GetItem` answer with `AllProperties`), so that the
+conversions to Graph, the comparisons, the plans and the checks of M9b take it as
+they are. Same method: a fidelity test first, then plans, then a check.
+
+1. **Reading** (`ecm-pst`): every property of a message, named properties
+   resolved through the store's name-to-id map ([MS-PST] 2.4.7), recipients, and
+   attachments: files (the contact photo is the one marked
+   `PidTagAttachmentContactPhoto`) and embedded messages (series exceptions).
+   Export PSTs carry no default folder ids: the folders read are those of exactly
+   the class `IPF.Appointment`, `IPF.Contact` and `IPF.Task` (not the birthday
+   calendar, the recipient cache or Skype's lists) outside Deleted Items,
+   Recoverable Items, Sync Issues and Junk Email, or the ones named with
+   `--folder`. A real export kept its whole calendar in Deleted Items.
+   `outlook-pst` 1.2 refuses a message without a sub-node tree ("Missing Sub-Node
+   Tree"), which [MS-PST] allows: such items are listed, not copied. Worth fixing
+   upstream: a real Outlook.com export had 184 of its 601 calendar items, contacts
+   and tasks so; an older Outlook export, none.
+2. **Calendar** ([MS-OXOCAL]): start and end in UTC (`PidLidAppointmentStartWhole`,
+   `PidLidAppointmentEndWhole`), the zone from
+   `PidLidAppointmentTimeZoneDefinitionStartDisplay` (a `TZDEFINITION` whose key
+   name is the Windows zone id) and the wall clock times in it; the recurrence from
+   `PidLidAppointmentRecur` (pattern, range, deleted and modified occurrences);
+   all-day, free/busy, reminder, location, categories, sensitivity, importance,
+   organizer and attendees from the recipients.
+3. **Contacts** ([MS-OXOCNTC]): names, company, email addresses
+   (`PidLidEmail1EmailAddress`…), phone numbers, postal addresses, birthday,
+   notes, categories and photo.
+4. **Tasks** ([MS-OXOTASK]): subject, body, status, start, due and completion
+   dates, reminder, importance, categories, recurrence.
+5. **Into Outlook.com**: `fidelity-graph-pim`, `plan-graph-pim` and
+   `check-graph-pim` take `--pst FILE` instead of an Exchange source. Trial on a
+   real PST (539 calendar items, 166 contacts): 5 events (a weekly series, a
+   yearly all-day series, zones of Paris, Montreal and UTC) and 7 contacts (a
+   photo, a birthday), every compared property equal.
+6. **Into Exchange**: `ecm plan-pim --pst` writes the items back as EWS
+   `CreateItem` XML in schema order, times in their zone, each photo a
+   `contact-photo` step after its contact; `--test` writes into `ecm-test`
+   folders created with their class. `ecm check-pim` compares them. Read-only
+   against a real mailbox whose calendar and contacts came from Outlook.com: of
+   539 calendar items, 268 equal, 236 missing (217 public holidays Outlook had
+   added, 15 yearly birthdays Outlook.com keeps in a separate calendar), the
+   others changed since; of 166 contacts, 81 equal and 26 missing. What it
+   showed:
+   - a zone can be a custom one with the rules of a known zone ("the fourth
+     Sunday of October"): compared by the days the time changes, in the event's
+     year;
+   - an all-day event without a zone keeps local midnight in UTC (23:00 for
+     Paris): the nearest midnight is its day. Outlook.com had stretched three
+     such events over two days;
+   - bodies kept only as RTF wrote accents as raw bytes, which `ecm-pst` read
+     as UTF-8: fixed for messages too. HTML bodies, plain or encapsulated in
+     RTF, can be UTF-8 whatever code page the item names.
+7. **Series exceptions**, for both targets, last: the series is created, then
+   each modified occurrence of the copy updated and each deleted occurrence of the
+   copy removed. Only occurrences of a series `ecm` has just created are removed.
 
 ## 8. Testing
 

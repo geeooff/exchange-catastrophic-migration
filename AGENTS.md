@@ -12,7 +12,9 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
 
 - `ecm-model`: item records, folder summaries, property comparison, folder paths.
 - `ecm-pst`: read-only PST on Microsoft's `outlook-pst`; full message content and
-  its rebuilding as MIME.
+  its rebuilding as MIME; calendar items, contacts and tasks read whole (`pim`:
+  named properties, recipients, photos, embedded exceptions) and the calendar
+  blobs (`calendar`: recurrences, time zones).
 - `ecm-http`: WinHTTP + NTLM/Negotiate, Credential Manager. Only crate with `unsafe`.
 - `ecm-ews`: hand-written SOAP + `quick-xml` tree: folders, items, export (backup),
   details, calendar items, contacts and tasks (listings and whole items), the
@@ -22,7 +24,10 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   the other types M9b in progress), every change in `write`.
 - `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching, defects, plans,
   verification.
-- `ecm-cli`: the `ecm` binary, one module per command family.
+- `ecm-cli`: the `ecm` binary, one module per command family. `pst_pim` turns PST
+  calendar items, contacts and tasks into what EWS gives for them, so the Exchange
+  → Graph conversions and checks take them as they are, and writes them back as
+  EWS `CreateItem` XML.
 
 ## Rules
 
@@ -118,6 +123,16 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   set: list a folder, then read the copies a plan made by the ids in its journal.
   Graph pages events and contacts by offset too: read the ids again. It gives an
   all-day event's days as set, in UTC: compare such events by day.
+- PST calendar items, contacts and tasks: named properties have a different id in
+  each file (the store's name-to-id map); `outlook-pst` 1.2's `lookup_guid` forgets
+  the GUID stream starts at index 3. Export PSTs carry no default folder ids, and
+  one kept its whole calendar in Deleted Items: name it with `--folder`. A zone is
+  a `TZDEFINITION` whose name may be a Windows id, an IANA name, a display name or
+  "Customized Time Zone": match its rules by the days the time changes. An all-day
+  event without a zone keeps local midnight in UTC (23:00 for Paris).
+- `compressed_rtf::decompress_rtf` gives each byte as the character of the same
+  number: turn it back into bytes, never `as_bytes()`. HTML bodies, in `PR_HTML`
+  or encapsulated in RTF, can be UTF-8 whatever code page the item names.
 - A debug build of `ecm` needs more than the 1 MB main thread stack Windows gives:
   `main` runs the command on a 16 MB thread.
 - `GetInboxRules`/`UpdateInboxRules` answer without `ResponseMessages`. Graph returns

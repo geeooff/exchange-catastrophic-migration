@@ -10,7 +10,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod calendar;
 pub mod content;
+pub mod pim;
 mod rtf;
 
 use std::{

@@ -22,10 +22,10 @@ to what can be migrated. Milestones: [plan.md](plan.md#7-milestones).
 | Large messages | ✅[^6] | 🟡[^7] | 🟡[^8] | ✗ | ⏳ M7 | ⏳ M7 |
 | Damaged copies, replaced and quarantined | ✅[^9] | 🟡[^10] | ✅ `ecm plan --after` | ✗ | ⏳ M7 | ⏳ M7 |
 | Folders | ✅ | ✅ | ✅ | ✗ | ⏳ M7 | ⏳ M7 |
-| Calendar | ⏳ M10 | ⏳ M10 | 🟡 `ecm plan-pim`[^11] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^19] |
-| Contacts | ⏳ M10 | ⏳ M10 | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
-| Contact photos | ⏳ M10 | ⏳ M10 | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
-| Tasks | ⏳ M10 | ⏳ M10 | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
+| Calendar | 🟡 `ecm plan-pim --pst`[^23] | 🟡 `ecm plan-graph-pim --pst`[^19][^23] | 🟡 `ecm plan-pim`[^11] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^19] |
+| Contacts | 🟡 `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^23] | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
+| Contact photos | 🟡 `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^20] | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
+| Tasks | 🟡 `ecm plan-pim --pst`[^25] | 🟡 `ecm plan-graph-pim --pst`[^25] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
 | Sticky notes | ✅ `ecm plan-notes` | ⏳ M9b[^13] | ✗[^13] | ✗ | ⏳ M7 | ⏳ M9b[^13] |
 | Inbox rules | ✗[^14] | ✗[^14] | 🟡 `ecm plan-rules`[^15] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^22] |
 | Categories | ✗ | ✗ | ✗ | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
@@ -42,8 +42,8 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 | Inventory | ✅ `ecm inventory --pst` | ✅ `ecm inventory --outlook-com` | ✅ `ecm inventory --ews` |
 | Audit, verify | ✅ `ecm audit`, `ecm verify` | ✅ `ecm audit --source outlook` | ⏳ M7 |
 | Bodies and files against the PST | — | ✅ `ecm check-content --outlook-com` | ✅ `ecm check-content --ews` |
-| Other item types against their source | — | ✅ `ecm check-graph-pim` | — |
-| Trial in `ecm-test` | — | ✅ `ecm fidelity-graph`, `ecm fidelity-graph-pim`[^18] | ✅ `ecm fidelity-test` |
+| Other item types against their source | — | ✅ `ecm check-graph-pim` | ✅ `ecm check-pim`[^24] |
+| Trial in `ecm-test` | — | ✅ `ecm fidelity-graph`, `ecm fidelity-graph-pim`[^18] | ✅ `ecm fidelity-test`; `ecm plan-pim --pst --test`[^24] |
 
 [^1]: Opened read-only, checksum checked before and after.
 [^2]: Tested on Outlook.com with personal Microsoft accounts. Microsoft 365 uses the
@@ -77,3 +77,14 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 [^21]: Into To Do; untested: the test mailbox had no tasks.
 [^22]: Tested on rules moving mail by sender or subject; folders by path, created
     when missing. Conditions and actions Graph lacks are listed.
+[^23]: From the PST's calendar, contact and task folders outside Deleted Items,
+    or the folders named with `--folder` (an export can keep its calendar in
+    Deleted Items). Tested on a PST of 539 calendar items and 166 contacts: a
+    trial of 12 items into Outlook.com, all equal to the PST. Series exceptions
+    are listed, not copied; contact groups are not copied. `outlook-pst` 1.2
+    cannot read items without a sub-node tree: they are listed.
+[^24]: Planned and checked against a real Exchange mailbox, read-only; the trial
+    copy into `ecm-test` folders (`--test`, created with their class) is still to
+    run. Meetings keep their attendees only when the user organized them; no
+    invitation is sent.
+[^25]: Untested: the test PSTs had no task readable.

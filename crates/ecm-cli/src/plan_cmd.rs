@@ -559,6 +559,26 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         })
                 }
             }
+            Action::CreateTypedFolder {
+                path: folder,
+                class,
+            } => {
+                if let Some(id) = self.folders.get(folder) {
+                    Ok(id.clone())
+                } else {
+                    let parent = path::parent(folder).unwrap_or_default();
+                    let name = path::split(folder).pop().unwrap_or_default();
+                    self.folder_id(&parent)
+                        .and_then(|parent_id| {
+                            self.client
+                                .create_folder_of_class(&parent_id, &name, class)
+                                .map_err(|e| e.to_string())
+                        })
+                        .inspect(|id| {
+                            self.folders.insert(folder.clone(), id.clone());
+                        })
+                }
+            }
             Action::Recreate {
                 source,
                 to,
@@ -614,17 +634,30 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                     .map(|()| name.clone())
                     .map_err(|e| e.to_string())
             }),
-            Action::ContactPhoto { item, photo, .. } => {
+            Action::ContactPhoto {
+                item,
+                requires,
+                photo,
+                ..
+            } => {
                 use base64::Engine as _;
-                base64::engine::general_purpose::STANDARD
-                    .decode(photo)
-                    .map_err(|e| e.to_string())
-                    .and_then(|photo| {
-                        self.client
-                            .attach_contact_photo(item, &photo)
-                            .map(|()| item.clone())
-                            .map_err(|e| e.to_string())
-                    })
+                let item = match requires {
+                    Some(step) => self.done.get(step).and_then(|line| line.id.clone()),
+                    None => Some(item.clone()),
+                };
+                match item {
+                    // Its contact was not created: retried with it.
+                    None => Err("skipped".into()),
+                    Some(item) => base64::engine::general_purpose::STANDARD
+                        .decode(photo)
+                        .map_err(|e| e.to_string())
+                        .and_then(|photo| {
+                            self.client
+                                .attach_contact_photo(&item, &photo)
+                                .map(|()| item.clone())
+                                .map_err(|e| e.to_string())
+                        }),
+                }
             }
             Action::Attach {
                 requires,

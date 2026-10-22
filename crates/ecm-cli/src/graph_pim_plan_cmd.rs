@@ -3,6 +3,9 @@
 //! mailbox, read over EWS, into a mailbox reached through Microsoft Graph, and
 //! check the copies against their source (milestone M9b).
 //!
+//! With `--pst`, the calendar, contacts and tasks come from a PST file instead
+//! (milestone M10), turned into what EWS gives for them.
+//!
 //! With `--test`, everything goes into test containers: the `ecm-test`
 //! calendar, contact folder and To Do list, and rules (disabled) and categories
 //! named with [`TEST_PREFIX`]; items whose reminder would ring later are left
@@ -49,6 +52,21 @@ pub enum PimKind {
     Rule,
     /// The master category list.
     Category,
+}
+
+/// Where the items come from.
+#[derive(Debug)]
+pub enum PimSource {
+    /// An Exchange mailbox, over EWS: every type.
+    Ews(crate::EwsArgs),
+    /// A PST file: calendar items, contacts and tasks, of the folders named, or
+    /// else of its calendar, contact and task folders.
+    Pst {
+        /// The file.
+        path: std::path::PathBuf,
+        /// Folder paths to read; empty for the default ones.
+        folders: Vec<String>,
+    },
 }
 
 /// What to copy, and where.
@@ -148,7 +166,7 @@ fn same_start(a: &PropertyMap, b: &PropertyMap) -> bool {
     }
 }
 
-fn same_event(a: &PropertyMap, b: &PropertyMap) -> bool {
+pub(crate) fn same_event(a: &PropertyMap, b: &PropertyMap) -> bool {
     same_start(a, b)
         && match (a.get("subject"), b.get("subject")) {
             (None, None) => true,
@@ -157,17 +175,17 @@ fn same_event(a: &PropertyMap, b: &PropertyMap) -> bool {
 }
 
 /// Like [`same_event`], with the very same subject.
-fn same_event_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
+pub(crate) fn same_event_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
     same_start(a, b) && a.get("subject") == b.get("subject")
 }
 
 /// Contacts with the same name.
-fn same_contact_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
+pub(crate) fn same_contact_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
     matches!((a.get("display_name"), b.get("display_name")),
         (Some(x), Some(y)) if x.to_lowercase() == y.to_lowercase())
 }
 
-fn same_contact(a: &PropertyMap, b: &PropertyMap) -> bool {
+pub(crate) fn same_contact(a: &PropertyMap, b: &PropertyMap) -> bool {
     let emails = |p: &PropertyMap| -> BTreeSet<String> {
         p.get("emails")
             .map(|e| e.split(';').map(str::to_owned).collect())
@@ -178,7 +196,7 @@ fn same_contact(a: &PropertyMap, b: &PropertyMap) -> bool {
             (Some(x), Some(y)) if x.to_lowercase() == y.to_lowercase())
 }
 
-fn same_task(a: &PropertyMap, b: &PropertyMap) -> bool {
+pub(crate) fn same_task(a: &PropertyMap, b: &PropertyMap) -> bool {
     a.get("subject") == b.get("subject") && a.get("due") == b.get("due")
 }
 
@@ -521,7 +539,7 @@ pub fn check_kind(
     checked
 }
 
-fn print_checked(what: &str, checked: &Checked) {
+pub(crate) fn print_checked(what: &str, checked: &Checked) {
     println!(
         "{what}: {} in the source, {} copies read; {} equal, {} different, {} missing",
         checked.source,
@@ -550,6 +568,8 @@ fn print_checked(what: &str, checked: &Checked) {
 
 #[cfg(windows)]
 pub use online::{check_graph_pim_command, plan_graph_pim_command};
+#[cfg(windows)]
+pub(crate) use online::{photo_of, read_any};
 
 #[cfg(windows)]
 mod online {
@@ -559,7 +579,6 @@ mod online {
 
     use super::*;
     use crate::{
-        EwsArgs,
         audit_cmd::GraphArgs,
         connect,
         graph_pim_cmd::rings_later,
@@ -578,13 +597,99 @@ mod online {
         folders: Option<GraphFolders>,
     }
 
+    /// Leaves out cancelled items, and in test containers those whose reminder
+    /// would ring later, saying so in `left_out`; then stores them in `source`.
+    fn keep(
+        source: &mut Source,
+        kind: PimKind,
+        mut items: Vec<Element>,
+        what: &str,
+        options: PimOptions,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let before = items.len();
+        items.retain(|item| item.child_text("IsCancelled") != Some("true"));
+        if items.len() < before {
+            source
+                .left_out
+                .push(format!("{} cancelled {what} items", before - items.len()));
+        }
+        if options.test && kind != PimKind::Contact {
+            let before = items.len();
+            items.retain(|item| !rings_later(item, now));
+            if items.len() < before {
+                source.left_out.push(format!(
+                    "{} {what} items whose reminder would ring later (a test copy would ring too)",
+                    before - items.len()
+                ));
+            }
+        }
+        match kind {
+            PimKind::Event => source.events = items,
+            PimKind::Contact => source.contacts = items,
+            _ => source.tasks = items,
+        }
+    }
+
+    /// The source's items, and the Exchange client that reads its contacts'
+    /// photos (`None` for a PST, whose photos are in the items).
+    pub(crate) fn read_any(
+        from: &PimSource,
+        options: PimOptions,
+    ) -> Result<(Source, Option<ecm_ews::EwsClient<ecm_http::HttpClient>>), String> {
+        match from {
+            PimSource::Ews(ews) => {
+                let client = connect(ews)?;
+                let source = read_source(&client, options)?;
+                Ok((source, Some(client)))
+            }
+            PimSource::Pst { path, folders } => {
+                let pim = crate::pst_pim::read_pst(path, folders)?;
+                let mut source = Source {
+                    left_out: pim.left_out,
+                    ..Source::default()
+                };
+                for (kind, items, what) in [
+                    (PimKind::Event, pim.events, "calendar"),
+                    (PimKind::Contact, pim.contacts, "contacts"),
+                    (PimKind::Task, pim.tasks, "tasks"),
+                ] {
+                    if options.wants(kind) {
+                        keep(&mut source, kind, items, what, options);
+                    }
+                }
+                for (kind, what) in [
+                    (PimKind::Rule, "inbox rules"),
+                    (PimKind::Category, "categories"),
+                ] {
+                    if options.wants(kind) {
+                        source
+                            .left_out
+                            .push(format!("{what}: a PST is not read for them"));
+                    }
+                }
+                Ok((source, None))
+            }
+        }
+    }
+
+    /// A contact's photo: read over EWS, or carried by the PST contact.
+    pub(crate) fn photo_of(
+        client: Option<&ecm_ews::EwsClient<ecm_http::HttpClient>>,
+        item: &Element,
+    ) -> Result<Option<Vec<u8>>, String> {
+        match client {
+            Some(client) => client.contact_photo(item).map_err(|e| e.to_string()),
+            None => Ok(crate::pst_pim::photo(item)),
+        }
+    }
+
     fn read_source<T: ecm_ews::Transport>(
         client: &ecm_ews::EwsClient<T>,
         options: PimOptions,
     ) -> Result<Source, String> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
         let mut source = Source::default();
         for (kind, distinguished) in [
             (PimKind::Event, "calendar"),
@@ -597,30 +702,8 @@ mod online {
             let folder = client
                 .get_distinguished_folder(distinguished)
                 .map_err(|e| e.to_string())?;
-            let mut items = client.full_items(&folder.id).map_err(|e| e.to_string())?;
-            let before = items.len();
-            items.retain(|item| item.child_text("IsCancelled") != Some("true"));
-            if items.len() < before {
-                source.left_out.push(format!(
-                    "{} cancelled {distinguished} items",
-                    before - items.len()
-                ));
-            }
-            if options.test && kind != PimKind::Contact {
-                let before = items.len();
-                items.retain(|item| !rings_later(item, now));
-                if items.len() < before {
-                    source.left_out.push(format!(
-                        "{} {distinguished} items whose reminder would ring later (a test copy would ring too)",
-                        before - items.len()
-                    ));
-                }
-            }
-            match kind {
-                PimKind::Event => source.events = items,
-                PimKind::Contact => source.contacts = items,
-                _ => source.tasks = items,
-            }
+            let items = client.full_items(&folder.id).map_err(|e| e.to_string())?;
+            keep(&mut source, kind, items, distinguished, options);
         }
         if options.wants(PimKind::Rule) {
             source.rules = client.inbox_rule_elements().map_err(|e| e.to_string())?;
@@ -751,21 +834,20 @@ mod online {
         Ok(GraphClient::new(transport, token))
     }
 
-    /// Writes a plan that copies into the Graph mailbox what of the Exchange
-    /// mailbox's calendar, contacts, tasks, inbox rules and categories it
-    /// lacks. Only reads both mailboxes.
+    /// Writes a plan that copies into the Graph mailbox what of the source's
+    /// calendar, contacts, tasks, inbox rules and categories it lacks. Only
+    /// reads the source and the target.
     pub fn plan_graph_pim_command(
-        ews: &EwsArgs,
+        from: &PimSource,
         graph: &GraphArgs,
         options: PimOptions,
         out: &Path,
     ) -> Result<(), String> {
-        let client = connect(ews)?;
-        let source = read_source(&client, options)?;
+        let (source, client) = read_any(from, options)?;
         let graph = sign_in(graph)?;
         let target = read_target(&graph, options)?;
         let (actions, notes) = plan_steps(&source, &existing(&target), options, &mut |item| {
-            client.contact_photo(item).map_err(|e| e.to_string())
+            photo_of(client.as_ref(), item)
         })?;
         let mut text = String::new();
         for action in &actions {
@@ -840,14 +922,13 @@ mod online {
     }
 
     pub fn check_graph_pim_command(
-        ews: &EwsArgs,
+        from: &PimSource,
         graph: &GraphArgs,
         options: PimOptions,
         plans: &[std::path::PathBuf],
     ) -> Result<(), String> {
         let created = created_ids(plans)?;
-        let client = connect(ews)?;
-        let source = read_source(&client, options)?;
+        let (source, client) = read_any(from, options)?;
         let graph = sign_in(graph)?;
         let mut target = read_target(&graph, options)?;
         let error = |e: ecm_graph::Error| e.to_string();
@@ -903,7 +984,7 @@ mod online {
             let mut sources = Vec::new();
             for contact in &source.contacts {
                 let photo = if has_photo(contact) {
-                    client.contact_photo(contact).map_err(|e| e.to_string())?
+                    photo_of(client.as_ref(), contact)?
                 } else {
                     None
                 };
@@ -1024,7 +1105,7 @@ mod online {
 
 #[cfg(not(windows))]
 pub fn plan_graph_pim_command(
-    _: &crate::EwsArgs,
+    _: &PimSource,
     _: &crate::audit_cmd::GraphArgs,
     _: PimOptions,
     _: &std::path::Path,
@@ -1034,7 +1115,7 @@ pub fn plan_graph_pim_command(
 
 #[cfg(not(windows))]
 pub fn check_graph_pim_command(
-    _: &crate::EwsArgs,
+    _: &PimSource,
     _: &crate::audit_cmd::GraphArgs,
     _: PimOptions,
     _: &[std::path::PathBuf],
