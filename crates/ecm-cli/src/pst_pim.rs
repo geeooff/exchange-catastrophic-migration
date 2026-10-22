@@ -1349,23 +1349,23 @@ mod tests {
     #[test]
     fn keeps_a_birthday_on_its_day_whatever_the_zone_it_was_saved_in() {
         let paris = properties(
-            vec![(0x3A42, Value::Time(filetime("1988-01-16T23:00:00Z")))],
+            vec![(0x3A42, Value::Time(filetime("1990-03-03T23:00:00Z")))],
             Vec::new(),
         );
-        assert_eq!(birthday(&paris).as_deref(), Some("1988-01-17T11:59:00Z"));
+        assert_eq!(birthday(&paris).as_deref(), Some("1990-03-04T11:59:00Z"));
         let montreal = properties(
-            vec![(0x3A42, Value::Time(filetime("1988-01-17T05:00:00Z")))],
+            vec![(0x3A42, Value::Time(filetime("1990-03-04T05:00:00Z")))],
             Vec::new(),
         );
-        assert_eq!(birthday(&montreal).as_deref(), Some("1988-01-17T11:59:00Z"));
+        assert_eq!(birthday(&montreal).as_deref(), Some("1990-03-04T11:59:00Z"));
         let local = properties(
-            vec![(0x3A42, Value::Time(filetime("1988-01-16T23:00:00Z")))],
+            vec![(0x3A42, Value::Time(filetime("1990-03-03T23:00:00Z")))],
             vec![(
                 Name::Number(PSETID_ADDRESS, 0x80DE),
-                Value::Time(filetime("1988-01-17T00:00:00Z")),
+                Value::Time(filetime("1990-03-04T00:00:00Z")),
             )],
         );
-        assert_eq!(birthday(&local).as_deref(), Some("1988-01-17T11:59:00Z"));
+        assert_eq!(birthday(&local).as_deref(), Some("1990-03-04T11:59:00Z"));
     }
 
     #[test]
