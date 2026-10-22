@@ -29,6 +29,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   another code page is read as UTF-8.
 - Bodies compared by what they show decode the named HTML entities (`&eacute;`,
   `&euro;`…).
+- A test calendar, contact or task folder is created without naming its class,
+  which Exchange refuses for these folders.
+- Contacts are matched by file-as, company and mobile phone too: a company's card
+  has no display name, and Exchange rebuilds a display name from the name's
+  parts. Such copies were listed as missing.
 
 ## [0.2.0] - 2026-10-20
 

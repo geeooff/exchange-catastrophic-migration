@@ -138,17 +138,21 @@ impl<T: Transport> EwsClient<T> {
         name: &str,
         class: &str,
     ) -> Result<String> {
-        // Typed folders are `CalendarFolder`, `ContactsFolder`, `TasksFolder`.
-        let element = match class {
-            "IPF.Appointment" => "CalendarFolder",
-            "IPF.Contact" => "ContactsFolder",
-            "IPF.Task" => "TasksFolder",
-            _ => "Folder",
+        // Typed folders are `CalendarFolder`, `ContactsFolder`, `TasksFolder`,
+        // whose class Exchange sets itself: naming it is refused
+        // (`ErrorNoFolderClassOverride`).
+        let (element, class) = match class {
+            "IPF.Appointment" => ("CalendarFolder", String::new()),
+            "IPF.Contact" => ("ContactsFolder", String::new()),
+            "IPF.Task" => ("TasksFolder", String::new()),
+            other => (
+                "Folder",
+                format!("<t:FolderClass>{}</t:FolderClass>", escape(other)),
+            ),
         };
         let body = format!(
-            r#"<m:CreateFolder><m:ParentFolderId><t:FolderId Id="{}"/></m:ParentFolderId><m:Folders><t:{element}><t:FolderClass>{}</t:FolderClass><t:DisplayName>{}</t:DisplayName></t:{element}></m:Folders></m:CreateFolder>"#,
+            r#"<m:CreateFolder><m:ParentFolderId><t:FolderId Id="{}"/></m:ParentFolderId><m:Folders><t:{element}>{class}<t:DisplayName>{}</t:DisplayName></t:{element}></m:Folders></m:CreateFolder>"#,
             escape(parent_id),
-            escape(class),
             escape(name)
         );
         let message = self
@@ -455,6 +459,34 @@ mod tests {
             "<t:MimeContent CharacterSet=\"UTF-8\">U3ViamVjdDogeA0KDQpib2R5</t:MimeContent>"
         ));
         assert!(request.contains(r#"<t:ExtendedFieldURI PropertyTag="0x0E07" PropertyType="Integer"/><t:Value>1</t:Value>"#));
+    }
+
+    #[test]
+    fn creates_typed_folders_without_naming_their_class() {
+        let created = |kind: &str| {
+            (
+                200,
+                soap(&format!(
+                    r#"<m:CreateFolderResponse><m:ResponseMessages><m:CreateFolderResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Folders><t:{kind}><t:FolderId Id="F1" ChangeKey="1"/></t:{kind}></m:Folders></m:CreateFolderResponseMessage></m:ResponseMessages></m:CreateFolderResponse>"#
+                )),
+            )
+        };
+        let fake = FakeTransport::new([created("CalendarFolder"), created("Folder")]);
+        let client = EwsClient::new(&fake);
+        assert_eq!(
+            client
+                .create_folder_of_class("CAL", "ecm-test", "IPF.Appointment")
+                .unwrap(),
+            "F1"
+        );
+        assert_eq!(client.create_folder("TOP", "Archive").unwrap(), "F1");
+        let requests = fake.requests.borrow();
+        assert!(requests[0].contains(
+            "<m:Folders><t:CalendarFolder><t:DisplayName>ecm-test</t:DisplayName></t:CalendarFolder></m:Folders>"
+        ));
+        assert!(requests[1].contains(
+            "<t:Folder><t:FolderClass>IPF.Note</t:FolderClass><t:DisplayName>Archive</t:DisplayName></t:Folder>"
+        ));
     }
 
     #[test]

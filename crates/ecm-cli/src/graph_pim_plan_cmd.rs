@@ -179,12 +179,22 @@ pub(crate) fn same_event_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
     same_start(a, b) && a.get("subject") == b.get("subject")
 }
 
-/// Contacts with the same name.
-pub(crate) fn same_contact_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
-    matches!((a.get("display_name"), b.get("display_name")),
-        (Some(x), Some(y)) if x.to_lowercase() == y.to_lowercase())
+/// A contact's name: its display name, else what it is filed as, else its
+/// company (a company's card often has no display name).
+fn contact_name(p: &PropertyMap) -> Option<String> {
+    ["display_name", "file_as", "company"]
+        .iter()
+        .find_map(|key| p.get(*key))
+        .map(|name| name.to_lowercase())
 }
 
+/// Contacts with the same name.
+pub(crate) fn same_contact_strictly(a: &PropertyMap, b: &PropertyMap) -> bool {
+    matches!((contact_name(a), contact_name(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Contacts with the same name, an address in common, or the same mobile
+/// phone: a server can rebuild a display name from the name's parts.
 pub(crate) fn same_contact(a: &PropertyMap, b: &PropertyMap) -> bool {
     let emails = |p: &PropertyMap| -> BTreeSet<String> {
         p.get("emails")
@@ -192,8 +202,8 @@ pub(crate) fn same_contact(a: &PropertyMap, b: &PropertyMap) -> bool {
             .unwrap_or_default()
     };
     !emails(a).is_disjoint(&emails(b))
-        || matches!((a.get("display_name"), b.get("display_name")),
-            (Some(x), Some(y)) if x.to_lowercase() == y.to_lowercase())
+        || same_contact_strictly(a, b)
+        || matches!((a.get("mobile_phone"), b.get("mobile_phone")), (Some(x), Some(y)) if x == y)
 }
 
 pub(crate) fn same_task(a: &PropertyMap, b: &PropertyMap) -> bool {
@@ -1404,6 +1414,33 @@ mod tests {
             ),
             [None, Some(0)]
         );
+    }
+
+    #[test]
+    fn matches_company_cards_and_renamed_contacts() {
+        let card = |pairs: &[(&str, &str)]| -> PropertyMap {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        let company = card(&[("company", "Acme Bank")]);
+        assert!(same_contact_strictly(
+            &company,
+            &card(&[("company", "ACME BANK"), ("job_title", "Desk")])
+        ));
+        assert!(same_contact_strictly(
+            &card(&[("file_as", "Acme Rouen"), ("company", "Acme")]),
+            &card(&[("file_as", "Acme Rouen")])
+        ));
+        let renamed = card(&[("display_name", "Dan"), ("mobile_phone", "+1 555 0100")]);
+        let rebuilt = card(&[
+            ("display_name", "Dan Example"),
+            ("mobile_phone", "+1 555 0100"),
+        ]);
+        assert!(!same_contact_strictly(&renamed, &rebuilt));
+        assert!(same_contact(&renamed, &rebuilt));
+        assert!(!same_contact(&company, &renamed));
     }
 
     #[test]
