@@ -203,6 +203,40 @@ pub enum Action {
         /// The photo, base64.
         photo: String,
     },
+    /// Change or remove one occurrence of the series an earlier step created:
+    /// what the source's series has as an exception. Only occurrences of a
+    /// series the plan itself created are touched; a removed one goes to the
+    /// Deleted Items folder.
+    Occurrence {
+        /// The step that created the series; its journal holds the series id.
+        requires: usize,
+        /// The series' folder (Exchange) or calendar by name (Outlook.com).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        to: String,
+        /// The series' subject, for reports.
+        subject: Option<String>,
+        /// When the series' pattern places the occurrence, UTC
+        /// (`2024-12-30T03:19:13Z`).
+        original_start: String,
+        /// What the occurrence has of its own; none to remove it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        change: Option<OccurrenceChange>,
+    },
+}
+
+/// What a modified occurrence of a series has of its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OccurrenceChange {
+    /// Its start, UTC.
+    pub start: String,
+    /// Its end, UTC.
+    pub end: String,
+    /// Its subject, when not the series'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Its location, when not the series'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 impl Action {
@@ -227,6 +261,10 @@ impl Action {
                 _ => "create",
             },
             Action::ContactPhoto { .. } | Action::SetPhoto { .. } => "contact-photo",
+            Action::Occurrence {
+                change: Some(_), ..
+            } => "change-occurrence",
+            Action::Occurrence { change: None, .. } => "remove-occurrence",
             Action::Attach { .. } => "attach",
             Action::CreateRule { .. } => "create-rule",
             Action::DiscardFolder { .. } => "discard-folder",

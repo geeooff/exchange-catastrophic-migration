@@ -124,6 +124,13 @@ impl<T: Transport> EwsClient<T> {
     /// zone ids, contacts with their attachments, tasks.
     pub fn full_items(&self, folder_id: &str) -> Result<Vec<Element>> {
         let ids: Vec<String> = self.find_all(folder_id, "")?.iter().map(item_id).collect();
+        self.items_by_id(&ids)
+    }
+
+    /// Items by id with all their properties, as [`full_items`](Self::full_items)
+    /// gives them: the modified occurrences of a series, whose ids the series
+    /// lists, are read this way.
+    pub fn items_by_id(&self, ids: &[String]) -> Result<Vec<Element>> {
         let mut items = Vec::with_capacity(ids.len());
         for batch in ids.chunks(50) {
             let mut body = String::from(

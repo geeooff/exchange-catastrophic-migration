@@ -8,6 +8,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Added
 
+- Series exceptions: a plan gives each series it creates the exceptions of its
+  source, with `occurrence` steps that remove an occurrence (into Deleted
+  Items, telling no one) or give it its own time, subject and location. From a
+  PST or an Exchange mailbox, into an Exchange mailbox (`plan-pim --pst`) or
+  Outlook.com (`plan-graph-pim`). `check-pim` and `check-graph-pim` compare
+  them.
+- `target series`: list the series of a calendar folder with their modified and
+  deleted occurrences.
+- `plan-discard --test`: move the `ecm-test` folders of trials into Deleted
+  Items, each named after its parent first.
 - PST files as a source for calendar items, contacts and their photos, and
   tasks. Every property is read, named ones through the PST's own map, with
   series (their pattern, range and exceptions), time zones and attendees.

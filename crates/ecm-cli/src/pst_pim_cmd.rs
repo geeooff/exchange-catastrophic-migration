@@ -9,7 +9,7 @@
 //! when the user organized them, and `CreateItem` invites no one.
 
 use base64::Engine as _;
-use ecm_audit::plan::Action;
+use ecm_audit::plan::{Action, OccurrenceChange};
 use ecm_ews::xml::Element;
 use ecm_model::compare::PropertyMap;
 
@@ -67,6 +67,111 @@ pub(crate) fn properties(kind: PimKind, item: &Element, with_photo: bool) -> Pro
     }
 }
 
+/// The steps that give a series the exceptions of its source, once `step` has
+/// created it in `to`, and what the plan says of them. Removed occurrences
+/// first, so that none is taken for one moved near it.
+pub(crate) fn occurrence_steps(
+    item: &Element,
+    step: usize,
+    to: &str,
+) -> (Vec<Action>, Option<String>) {
+    let text = |element: &Element, name: &str| {
+        element
+            .child_text(name)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let list = |name: &str| {
+        item.child(name)
+            .map(|list| list.children.as_slice())
+            .unwrap_or_default()
+    };
+    let subject = text(item, "Subject");
+    let mut steps = Vec::new();
+    for deleted in list("DeletedOccurrences") {
+        if let Some(original_start) = text(deleted, "Start") {
+            steps.push(Action::Occurrence {
+                requires: step,
+                to: to.to_owned(),
+                subject: subject.clone(),
+                original_start,
+                change: None,
+            });
+        }
+    }
+    let mut modified = 0;
+    for occurrence in list("ModifiedOccurrences") {
+        let (Some(original_start), Some(start), Some(end)) = (
+            text(occurrence, "OriginalStart"),
+            text(occurrence, "Start"),
+            text(occurrence, "End"),
+        ) else {
+            continue;
+        };
+        // Its own subject and location, when they are not the series'.
+        let own = |name: &str| {
+            text(occurrence, name).filter(|value| Some(value) != text(item, name).as_ref())
+        };
+        modified += 1;
+        steps.push(Action::Occurrence {
+            requires: step,
+            to: to.to_owned(),
+            subject: subject.clone(),
+            original_start,
+            change: Some(OccurrenceChange {
+                start,
+                end,
+                subject: own("Subject"),
+                location: own("Location"),
+            }),
+        });
+    }
+    let note = (modified > 0).then(|| {
+        format!(
+            "its {modified} modified occurrences keep only their own time, subject and location"
+        )
+    });
+    (steps, note)
+}
+
+/// The exceptions of a series as one text, to compare a copy's with its
+/// source's: each removed occurrence, and each moved one with its times. Empty
+/// for an item without any.
+pub(crate) fn exceptions_text(item: &Element) -> String {
+    let list = |name: &str| {
+        item.child(name)
+            .map(|list| list.children.as_slice())
+            .unwrap_or_default()
+    };
+    let text = |element: &Element, name: &str| {
+        element
+            .child_text(name)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let mut lines: Vec<String> = list("DeletedOccurrences")
+        .iter()
+        .map(|o| format!("{} removed", text(o, "Start")))
+        .chain(list("ModifiedOccurrences").iter().map(|o| {
+            format!(
+                "{} moved to {} until {}",
+                text(o, "OriginalStart"),
+                text(o, "Start"),
+                text(o, "End")
+            )
+        }))
+        .collect();
+    lines.sort();
+    lines.join("; ")
+}
+
+/// Whether a note is the one conversions make of a series' exceptions, which
+/// a plan copies with [`occurrence_steps`].
+pub(crate) fn is_occurrence_note(note: &str) -> bool {
+    note.ends_with("occurrences of the series")
+}
+
 /// The plan's steps for what the target lacks, and what the plan says about
 /// what it leaves out.
 pub fn plan_steps(kinds: &[KindPlan]) -> (Vec<Action>, Vec<String>) {
@@ -103,7 +208,11 @@ pub fn plan_steps(kinds: &[KindPlan]) -> (Vec<Action>, Vec<String>) {
                 .filter(|s| !s.is_empty());
             let (xml, lost) = create_xml(item);
             let label = format!("{:?}", subject.as_deref().unwrap_or_default());
-            notes.extend(lost.iter().map(|l| format!("{name} {label}: {l}")));
+            notes.extend(
+                lost.iter()
+                    .filter(|l| !is_occurrence_note(l))
+                    .map(|l| format!("{name} {label}: {l}")),
+            );
             let step = actions.len();
             actions.push(Action::Create {
                 kind: name.into(),
@@ -111,6 +220,11 @@ pub fn plan_steps(kinds: &[KindPlan]) -> (Vec<Action>, Vec<String>) {
                 subject: subject.clone(),
                 item: xml,
             });
+            if plan.kind == PimKind::Event {
+                let (steps, note) = occurrence_steps(item, step, &plan.to);
+                actions.extend(steps);
+                notes.extend(note.map(|l| format!("{name} {label}: {l}")));
+            }
             if plan.kind == PimKind::Contact
                 && let Some(bytes) = photo(item)
             {
@@ -287,6 +401,18 @@ mod online {
         let client = connect(ews)?;
         for (kind, to, id, _) in target_folders(&client, options)? {
             let (name, compared, strict, same) = kind_info(kind);
+            // A series' exceptions are compared too: both sides list them.
+            let mut compared = compared.to_vec();
+            if kind == PimKind::Event {
+                compared.push("exceptions");
+            }
+            let with_exceptions = |item: &Element, mut props: PropertyMap| {
+                let exceptions = exceptions_text(item);
+                if kind == PimKind::Event && !exceptions.is_empty() {
+                    props.insert("exceptions".into(), exceptions);
+                }
+                props
+            };
             let sources: Vec<(String, PropertyMap)> = items_of(&mut source, kind)
                 .iter()
                 .map(|item| {
@@ -295,7 +421,7 @@ mod online {
                         .find_map(|n| item.child_text(n))
                         .unwrap_or_default()
                         .to_owned();
-                    (label, properties(kind, item, true))
+                    (label, with_exceptions(item, properties(kind, item, true)))
                 })
                 .collect();
             let copies = match &id {
@@ -303,13 +429,16 @@ mod online {
                     .full_items(id)
                     .map_err(|e| e.to_string())?
                     .iter()
-                    .map(|item| properties_of_copy(&client, kind, item, true))
+                    .map(|item| {
+                        properties_of_copy(&client, kind, item, true)
+                            .map(|props| with_exceptions(item, props))
+                    })
                     .collect::<Result<Vec<_>, String>>()?,
                 None => Vec::new(),
             };
             print_checked(
                 &format!("{name}s in {to}"),
-                &check_kind(compared, &sources, &copies, strict, same),
+                &check_kind(&compared, &sources, &copies, strict, same),
             );
         }
         Ok(())
@@ -417,5 +546,74 @@ mod tests {
             matches!(&actions[3], Action::ContactPhoto { requires: Some(2), photo, .. }
             if photo == "/9j/")
         );
+    }
+
+    #[test]
+    fn plans_the_exceptions_of_a_series_after_it() {
+        let occurrence = |children: Vec<(&str, &str)>| element("Occurrence", children);
+        let mut series = element(
+            "CalendarItem",
+            vec![("Subject", "Yoga"), ("Location", "Studio")],
+        );
+        series.children.push(Element {
+            name: "ModifiedOccurrences".into(),
+            children: vec![occurrence(vec![
+                ("Start", "2024-05-21T12:00:00Z"),
+                ("End", "2024-05-21T13:00:00Z"),
+                ("OriginalStart", "2024-05-20T08:00:00Z"),
+                ("Subject", "Yoga"),
+                ("Location", "Park"),
+            ])],
+            ..Element::default()
+        });
+        series.children.push(Element {
+            name: "DeletedOccurrences".into(),
+            children: vec![element(
+                "DeletedOccurrence",
+                vec![("Start", "2024-05-13T08:00:00Z")],
+            )],
+            ..Element::default()
+        });
+        let (steps, note) = occurrence_steps(&series, 4, "Calendar/ecm-test");
+        // The removal first; the moved occurrence keeps the series' subject and
+        // has its own location.
+        assert_eq!(
+            steps,
+            [
+                Action::Occurrence {
+                    requires: 4,
+                    to: "Calendar/ecm-test".into(),
+                    subject: Some("Yoga".into()),
+                    original_start: "2024-05-13T08:00:00Z".into(),
+                    change: None,
+                },
+                Action::Occurrence {
+                    requires: 4,
+                    to: "Calendar/ecm-test".into(),
+                    subject: Some("Yoga".into()),
+                    original_start: "2024-05-20T08:00:00Z".into(),
+                    change: Some(OccurrenceChange {
+                        start: "2024-05-21T12:00:00Z".into(),
+                        end: "2024-05-21T13:00:00Z".into(),
+                        subject: None,
+                        location: Some("Park".into()),
+                    }),
+                },
+            ]
+        );
+        assert!(
+            note.unwrap()
+                .starts_with("its 1 modified occurrences keep only")
+        );
+        assert_eq!(
+            exceptions_text(&series),
+            "2024-05-13T08:00:00Z removed; 2024-05-20T08:00:00Z moved to 2024-05-21T12:00:00Z until 2024-05-21T13:00:00Z"
+        );
+        assert_eq!(steps[0].kind(), "remove-occurrence");
+        assert_eq!(steps[1].kind(), "change-occurrence");
+
+        let plain = element("CalendarItem", vec![("Subject", "Dentist")]);
+        assert_eq!(occurrence_steps(&plain, 0, "Calendar"), (Vec::new(), None));
+        assert_eq!(exceptions_text(&plain), "");
     }
 }

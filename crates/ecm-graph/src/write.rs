@@ -288,6 +288,87 @@ impl<T: Transport> GraphClient<T> {
     }
 }
 
+/// Half the width of the window an occurrence is looked for in: series recur
+/// by the day at the least, so the window holds one unchanged occurrence.
+const OCCURRENCE_WINDOW: i64 = 12 * 3600;
+
+impl<T: Transport> GraphClient<T> {
+    /// The id of the occurrence of a series that its pattern places at
+    /// `original_start` (UTC, `2024-12-30T03:19:13Z`): among the series'
+    /// instances around that time, one not yet changed rather than one moved
+    /// there. Only reads.
+    pub fn occurrence_of(&self, series_id: &str, original_start: &str) -> Result<String> {
+        let at = ecm_model::item::parse_utc(original_start).ok_or_else(|| {
+            Error::MalformedResponse(format!("{original_start:?} is not a UTC time"))
+        })?;
+        let instances = self.get_all(&format!(
+            "/me/events/{}/instances?startDateTime={}&endDateTime={}&$select=id,start,type&$top=50",
+            encode(series_id),
+            encode(&ecm_model::item::format_iso(at - OCCURRENCE_WINDOW + 1)),
+            encode(&ecm_model::item::format_iso(at + OCCURRENCE_WINDOW - 1)),
+        ))?;
+        // (starts at the original time, not yet changed, id)
+        let mut candidates: Vec<(bool, bool, &str)> = instances
+            .iter()
+            .filter_map(|instance| {
+                let id = instance["id"].as_str()?;
+                let start = instance["start"]["dateTime"].as_str()?;
+                let start = ecm_model::item::parse_utc(&format!("{start}Z"))?;
+                let unchanged = instance["type"].as_str() == Some("occurrence");
+                Some((start == at, unchanged, id))
+            })
+            .collect();
+        candidates.sort_by_key(|(on_time, unchanged, _)| (!on_time, !unchanged));
+        match candidates.as_slice() {
+            [(true, _, id), ..] | [(false, true, id)] => Ok((*id).to_owned()),
+            _ => Err(Error::MalformedResponse(format!(
+                "no occurrence of the series at {original_start}"
+            ))),
+        }
+    }
+
+    /// Removes one occurrence of a series, by its own id: the series keeps it
+    /// as a cancelled occurrence. Only for a series without attendees, which
+    /// tells no one.
+    pub fn remove_occurrence(&self, occurrence_id: &str) -> Result<()> {
+        self.request(
+            "DELETE",
+            &format!("/me/events/{}", encode(occurrence_id)),
+            "application/json",
+            None,
+            &[],
+            None,
+        )
+        .map(|_| ())
+    }
+
+    /// Gives one occurrence of a series, by its own id, a start and an end
+    /// (UTC) and maybe a subject and a location of its own.
+    pub fn change_occurrence(
+        &self,
+        occurrence_id: &str,
+        start: &str,
+        end: &str,
+        subject: Option<&str>,
+        location: Option<&str>,
+    ) -> Result<()> {
+        let time = |utc: &str| serde_json::json!({"dateTime": utc.trim_end_matches('Z'), "timeZone": "UTC"});
+        let mut change = serde_json::json!({"start": time(start), "end": time(end)});
+        if let Some(subject) = subject {
+            change["subject"] = Value::String(subject.to_owned());
+        }
+        if let Some(location) = location {
+            change["location"] = serde_json::json!({"displayName": location});
+        }
+        self.send_json(
+            "PATCH",
+            &format!("/me/events/{}", encode(occurrence_id)),
+            &change,
+        )
+        .map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -516,5 +597,54 @@ mod tests {
             requests[1].2,
             r#"{"color":"preset9","displayName":"ecm-test Famille"}"#
         );
+    }
+
+    #[test]
+    fn finds_changes_and_removes_an_occurrence_of_a_series() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                r#"{"value":[
+                    {"id":"M","type":"exception","start":{"dateTime":"2024-05-06T10:00:00.0000000","timeZone":"UTC"}},
+                    {"id":"O","type":"occurrence","start":{"dateTime":"2024-05-06T08:00:00.0000000","timeZone":"UTC"}}
+                ]}"#
+                .into(),
+            ),
+            (200, r#"{"id":"O"}"#.into()),
+            (204, String::new()),
+            (
+                200,
+                r#"{"value":[{"id":"M","type":"exception","start":{"dateTime":"2024-05-06T10:00:00.0000000","timeZone":"UTC"}}]}"#.into(),
+            ),
+        ]);
+        let client = GraphClient::new(&fake, "t".into());
+        let id = client.occurrence_of("S1", "2024-05-06T08:00:00Z").unwrap();
+        assert_eq!(id, "O");
+        client
+            .change_occurrence(
+                &id,
+                "2024-05-07T12:00:00Z",
+                "2024-05-07T13:00:00Z",
+                Some("Yoga"),
+                None,
+            )
+            .unwrap();
+        client.remove_occurrence("O2").unwrap();
+        // Only an occurrence already moved near that time: refused.
+        assert!(client.occurrence_of("S1", "2024-05-06T08:00:00Z").is_err());
+
+        let requests = fake.requests.borrow();
+        assert_eq!(requests[0].0, "GET");
+        assert!(requests[0].1.contains(
+            "/me/events/S1/instances?startDateTime=2024-05-05T20%3A00%3A01Z&endDateTime=2024-05-06T19%3A59%3A59Z&"
+        ));
+        assert_eq!(requests[1].0, "PATCH");
+        assert!(requests[1].1.ends_with("/me/events/O"));
+        assert_eq!(
+            requests[1].2,
+            r#"{"end":{"dateTime":"2024-05-07T13:00:00","timeZone":"UTC"},"start":{"dateTime":"2024-05-07T12:00:00","timeZone":"UTC"},"subject":"Yoga"}"#
+        );
+        assert_eq!(requests[2].0, "DELETE");
+        assert!(requests[2].1.ends_with("/me/events/O2"));
     }
 }

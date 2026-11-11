@@ -162,20 +162,53 @@ pub fn park_command(
     Ok(())
 }
 
+/// Whether a folder is one a plan may move into Deleted Items: a quarantine
+/// run folder, or an `ecm-test` folder, which only trials write into.
+fn discardable(folder_path: &str) -> bool {
+    let names = path::split(folder_path);
+    (names.len() == 2 && names[0] == ecm_audit::plan::QUARANTINE_FOLDER)
+        || names.last().map(String::as_str) == Some(crate::fidelity_cmd::TEST_FOLDER)
+}
+
 /// Writes a plan moving quarantine run folders (all of them, or those named)
-/// into Deleted Items, where the user empties them. Only reads.
-pub fn discard_command(ews: &EwsArgs, runs: &[String], out: &Path) -> Result<(), String> {
+/// into Deleted Items, where the user empties them; with `test`, the
+/// `ecm-test` folders of trials instead, wherever they are but in Deleted
+/// Items. Only reads.
+pub fn discard_command(
+    ews: &EwsArgs,
+    runs: &[String],
+    test: bool,
+    out: &Path,
+) -> Result<(), String> {
     use ecm_audit::plan::QUARANTINE_FOLDER;
 
     let client = connect(ews)?;
     let tree = client
         .folder_tree("msgfolderroot")
         .map_err(|e| e.to_string())?;
+    let deleted = client
+        .get_distinguished_folder("deleteditems")
+        .map_err(|e| e.to_string())?
+        .id;
+    let paths = tree.with_paths();
+    let deleted_path = paths
+        .iter()
+        .find(|(_, folder)| folder.id == deleted)
+        .map(|(path, _)| path.clone());
     let mut actions = Vec::new();
     let mut total = 0;
-    for (folder_path, folder) in tree.with_paths() {
+    for (folder_path, folder) in paths {
         let names = path::split(&folder_path);
-        if names.len() != 2 || names[0] != QUARANTINE_FOLDER {
+        if test {
+            let in_deleted = deleted_path
+                .as_deref()
+                .is_some_and(|d| path::split(d).first() == names.first());
+            if names.last().map(String::as_str) != Some(crate::fidelity_cmd::TEST_FOLDER)
+                || in_deleted
+            {
+                continue;
+            }
+        } else if names.len() != 2 || names[0] != QUARANTINE_FOLDER {
             continue;
         }
         if !runs.is_empty() && !runs.contains(&names[1]) {
@@ -614,18 +647,31 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                 })
             }
             Action::DiscardFolder { path, .. } => {
-                let parked = path::split(path).first().map(String::as_str)
-                    == Some(ecm_audit::plan::QUARANTINE_FOLDER)
-                    && path::split(path).len() == 2;
-                if parked {
+                if discardable(path) {
                     self.folder_id(path).and_then(|id| {
+                        // Deleted Items takes one folder of a name: a test
+                        // folder is named after its parent first.
+                        if let [.., parent, last] = path::split(path).as_slice()
+                            && last == crate::fidelity_cmd::TEST_FOLDER
+                        {
+                            let class = self
+                                .client
+                                .get_folder(&id)
+                                .map_err(|e| e.to_string())?
+                                .class;
+                            self.client
+                                .rename_folder(&id, class.as_deref(), &format!("{last} ({parent})"))
+                                .map_err(|e| e.to_string())?;
+                        }
                         self.client
                             .move_folder_to_deleted_items(&id)
                             .map(|()| path.clone())
                             .map_err(|e| e.to_string())
                     })
                 } else {
-                    Err(format!("{path} is not a quarantine run folder"))
+                    Err(format!(
+                        "{path} is neither a quarantine run folder nor an ecm-test folder"
+                    ))
                 }
             }
             Action::CreateRule { name, rule } => self.resolve_folders(rule).and_then(|rule| {
@@ -686,6 +732,36 @@ impl<'a, T: ecm_ews::Transport> Runner<'a, T> {
                         })
                         .map(|()| item)
                 }
+            },
+            Action::Occurrence {
+                requires,
+                to,
+                original_start,
+                change,
+                ..
+            } => match self.done.get(requires).and_then(|line| line.id.clone()) {
+                // Its series was not created: retried with it.
+                None => Err("skipped".into()),
+                Some(series) => self.folder_id(to).and_then(|folder| {
+                    let occurrence = self
+                        .client
+                        .occurrence_of(&folder, &series, original_start)
+                        .map_err(|e| e.to_string())?;
+                    match change {
+                        Some(change) => self.client.change_occurrence(
+                            &occurrence,
+                            &ecm_ews::write::OccurrenceChange {
+                                start: &change.start,
+                                end: &change.end,
+                                subject: change.subject.as_deref(),
+                                location: change.location.as_deref(),
+                            },
+                        ),
+                        None => self.client.remove_occurrence(&occurrence),
+                    }
+                    .map(|()| occurrence)
+                    .map_err(|e| e.to_string())
+                }),
             },
             Action::CreateMessage { .. } | Action::CreateGraph { .. } | Action::SetPhoto { .. } => {
                 Err(format!(
@@ -882,5 +958,27 @@ mod tests {
         assert_eq!(steps, [0, 2]);
         assert!(read_journal(&dir.join("missing.jsonl")).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_quarantine_runs_and_test_folders_can_be_discarded() {
+        for path in [
+            "ecm-quarantine/2026-01-01-12-00",
+            "ecm-test",
+            "Calendar/ecm-test",
+            "Contacts/ecm-test",
+        ] {
+            assert!(super::discardable(path), "{path}");
+        }
+        for path in [
+            "Inbox",
+            "ecm-quarantine",
+            "ecm-quarantine/2026-01-01-12-00/Inbox",
+            "Calendar",
+            "Calendar/ecm-test/Other",
+            "Calendar/ecm-tests",
+        ] {
+            assert!(!super::discardable(path), "{path}");
+        }
     }
 }
