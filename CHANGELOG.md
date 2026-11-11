@@ -23,6 +23,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- PST calendar items, contacts and tasks without recipients or attachments were
+  listed as unreadable ("Missing Sub-Node Tree"): 228 of the 640 of a real
+  Outlook.com export, 34 of its 35 tasks. They are now read.
+- PST calendar items, contacts and tasks lost the named properties written after
+  a property of a type `outlook-pst` does not know. They are now read.
 - A body kept only as RTF that writes accents as raw bytes (as Word does) was
   read as if they were UTF-8: "AnaÃ¯s" for "Anaïs", in rebuilt messages too.
 - An HTML body, plain or encapsulated in RTF, that is UTF-8 while its item names

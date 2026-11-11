@@ -13,6 +13,7 @@
 pub mod calendar;
 pub mod content;
 pub mod pim;
+mod raw;
 mod rtf;
 
 use std::{
@@ -153,6 +154,8 @@ pub struct PstSource {
     store: Rc<dyn Store>,
     /// The same store, typed, to open attachments (Unicode PSTs only).
     unicode: Option<Rc<UnicodeStore>>,
+    /// Its file, to read the nodes `outlook-pst` refuses (Unicode PSTs only).
+    file: Option<Rc<UnicodePstFile>>,
 }
 
 impl fmt::Debug for PstSource {
@@ -182,10 +185,13 @@ impl PstSource {
         // handle for each attempt, since a failed attempt consumes its reader.
         let unicode = UnicodePstFile::read_from(Box::new(open_read_only(&path).map_err(io_error)?));
         let mut typed = None;
+        let mut file = None;
         let (format, store): (PstFormat, Rc<dyn Store>) = match unicode {
             Ok(pst) => {
-                let store = UnicodeStore::read(Rc::new(pst)).map_err(format_error)?;
+                let pst = Rc::new(pst);
+                let store = UnicodeStore::read(pst.clone()).map_err(format_error)?;
                 typed = Some(store.clone());
+                file = Some(pst);
                 (PstFormat::Unicode, store)
             }
             Err(unicode_error) => {
@@ -204,6 +210,7 @@ impl PstSource {
             format,
             store,
             unicode: typed,
+            file,
         })
     }
 
