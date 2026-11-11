@@ -989,7 +989,16 @@ pub fn create_xml(item: &Element) -> (String, Vec<String>) {
             );
         }
         "Contact" => write_ordered(item, &CONTACT_ORDER, &mut xml),
-        _ => write_ordered(item, &TASK_ORDER, &mut xml),
+        _ => {
+            // A completion date makes the task completed. Exchange applies the
+            // elements in order: the status after it would set the date to the
+            // current day.
+            let mut item = item.clone();
+            if item.child("CompleteDate").is_some() {
+                item.children.retain(|c| c.name != "Status");
+            }
+            write_ordered(&item, &TASK_ORDER, &mut xml);
+        }
     }
     xml += &format!("</t:{}>", item.name);
     (xml, notes)
@@ -1208,6 +1217,36 @@ mod tests {
                 r#"<t:PhysicalAddresses><t:Entry Key="Home"><t:CountryOrRegion>France</t:CountryOrRegion>"#,
                 "<t:PostalCode>75001</t:PostalCode></t:Entry></t:PhysicalAddresses></t:Contact>"
             )
+        );
+    }
+
+    #[test]
+    fn writes_a_completed_task_by_its_date_alone() {
+        let done = node(
+            "Task",
+            vec![
+                leaf("Subject", "Renew passport"),
+                leaf("ReminderIsSet", "false"),
+                leaf("Status", "Completed"),
+                leaf("DueDate", "2024-02-28T00:00:00Z"),
+                leaf("CompleteDate", "2024-03-01T00:00:00Z"),
+            ],
+        );
+        assert_eq!(
+            create_xml(&done).0,
+            concat!(
+                "<t:Task><t:Subject>Renew passport</t:Subject><t:ReminderIsSet>false</t:ReminderIsSet>",
+                "<t:CompleteDate>2024-03-01T00:00:00Z</t:CompleteDate><t:DueDate>2024-02-28T00:00:00Z</t:DueDate>",
+                "</t:Task>"
+            )
+        );
+        let waiting = node(
+            "Task",
+            vec![leaf("Subject", "Call"), leaf("Status", "WaitingOnOthers")],
+        );
+        assert_eq!(
+            create_xml(&waiting).0,
+            "<t:Task><t:Subject>Call</t:Subject><t:Status>WaitingOnOthers</t:Status></t:Task>"
         );
     }
 

@@ -681,12 +681,19 @@ pub fn task_xml(task: &Value, list: Option<&str>) -> String {
     }
     xml += &format!("<t:ReminderIsSet>{reminder}</t:ReminderIsSet>");
     let status = task["status"].as_str().unwrap_or("notStarted");
-    if status == "completed" {
-        xml += &element("CompleteDate", utc(&task["completedDateTime"]).as_deref());
-    }
+    let completed = if status == "completed" {
+        element("CompleteDate", utc(&task["completedDateTime"]).as_deref())
+    } else {
+        String::new()
+    };
+    xml += &completed;
     xml += &element("DueDate", utc(&task["dueDateTime"]).as_deref());
     xml += &element("StartDate", utc(&task["startDateTime"]).as_deref());
-    xml += &element("Status", Some(&capitalized(status)));
+    // A completion date makes the task completed. Exchange applies the elements
+    // in order: the status after it would set the date to the current day.
+    if completed.is_empty() {
+        xml += &element("Status", Some(&capitalized(status)));
+    }
     xml += "</t:Task>";
     xml
 }
@@ -833,7 +840,7 @@ mod tests {
                 "<t:Task><t:Subject>Renew passport</t:Subject><t:Categories><t:String>Family</t:String></t:Categories>",
                 "<t:Importance>High</t:Importance><t:ReminderIsSet>false</t:ReminderIsSet>",
                 "<t:CompleteDate>2024-03-01T00:00:00Z</t:CompleteDate><t:DueDate>2024-02-28T00:00:00Z</t:DueDate>",
-                "<t:Status>Completed</t:Status></t:Task>"
+                "</t:Task>"
             )
         );
     }

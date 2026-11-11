@@ -25,7 +25,7 @@ to what can be migrated. Milestones: [plan.md](plan.md#7-milestones).
 | Calendar | 🟡 `ecm plan-pim --pst`[^23] | 🟡 `ecm plan-graph-pim --pst`[^19][^23] | 🟡 `ecm plan-pim`[^11] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^19] |
 | Contacts | ✅ `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^23] | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
 | Contact photos | ✅ `ecm plan-pim --pst` | ✅ `ecm plan-graph-pim --pst`[^20] | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
-| Tasks | 🟡 `ecm plan-pim --pst`[^25] | 🟡 `ecm plan-graph-pim --pst`[^25] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
+| Tasks | ✅ `ecm plan-pim --pst`[^25] | 🟡 `ecm plan-graph-pim --pst`[^26] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
 | Sticky notes | ✅ `ecm plan-notes` | ⏳ M9b[^13] | ✗[^13] | ✗ | ⏳ M7 | ⏳ M9b[^13] |
 | Inbox rules | ✗[^14] | ✗[^14] | 🟡 `ecm plan-rules`[^15] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^22] |
 | Categories | ✗ | ✗ | ✗ | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
@@ -91,4 +91,7 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     Exchange rebuilds the display name and file-as of a contact from its name's
     parts when they disagree (1 contact). Meetings keep their attendees only when
     the user organized them; no invitation is sent.
-[^25]: Untested: the test PSTs had no task readable.
+[^25]: Tested on the 35 tasks of a PST copied into the `ecm-test` task folder of
+    an Exchange 2019 mailbox (`--test`): status, importance, body, due and
+    completion dates equal to the PST. None had a recurrence or a reminder.
+[^26]: The conversion was checked in a dry run on 35 tasks; none was copied.
