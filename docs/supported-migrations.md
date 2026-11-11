@@ -81,8 +81,10 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     or the folders named with `--folder` (an export can keep its calendar in
     Deleted Items). Tested on a PST of 539 calendar items and 166 contacts: a
     trial of 12 items into Outlook.com, all equal to the PST. Series exceptions
-    are listed, not copied; contact groups are not copied. `outlook-pst` 1.2
-    cannot read items without a sub-node tree: they are listed.
+    are listed, not copied; contact groups are not copied. Items without a
+    sub-node tree (no recipient, no attachment), which `outlook-pst` 1.2
+    refuses, are read from their node's bytes: 228 of the 640 items of a real
+    Outlook.com export.
 [^24]: Tested on a PST of 539 calendar items and 166 contacts copied into the
     `ecm-test` folders of an Exchange 2019 mailbox (`--test`, created with their
     class): 531 calendar items and 165 contacts equal to the PST, photos included.

@@ -130,6 +130,12 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   a `TZDEFINITION` whose name may be a Windows id, an IANA name, a display name or
   "Customized Time Zone": match its rules by the days the time changes. An all-day
   event without a zone keeps local midnight in UTC (23:00 for Paris).
+- `outlook-pst` 1.2 refuses a message without a sub-node tree (most tasks and
+  contacts of an Outlook.com export), and drops the properties written after one
+  whose type it does not know (`PtypServerId`). `ecm-pst::raw` reads a node's own
+  properties from its bytes; in a data tree every block but the last holds 8,176
+  bytes. To check it against a real PST: `ECM_TEST_PST=file cargo test -p ecm-pst
+  raw_reading_agrees -- --ignored --nocapture`.
 - `compressed_rtf::decompress_rtf` gives each byte as the character of the same
   number: turn it back into bytes, never `as_bytes()`. HTML bodies, in `PR_HTML`
   or encapsulated in RTF, can be UTF-8 whatever code page the item names.

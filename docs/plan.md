@@ -278,9 +278,17 @@ they are. Same method: a fidelity test first, then plans, then a check.
    Recoverable Items, Sync Issues and Junk Email, or the ones named with
    `--folder`. A real export kept its whole calendar in Deleted Items.
    `outlook-pst` 1.2 refuses a message without a sub-node tree ("Missing Sub-Node
-   Tree"), which [MS-PST] allows: such items are listed, not copied. Worth fixing
-   upstream: a real Outlook.com export had 184 of its 601 calendar items, contacts
-   and tasks so; an older Outlook export, none.
+   Tree"), which [MS-PST] allows for one with no recipient and no attachment: a
+   real Outlook.com export had 228 of its 640 calendar items, contacts and tasks
+   so (34 of its 35 tasks); an older Outlook export, none. It also stops reading
+   a message's properties at one whose type it does not know (a server id,
+   `PtypServerId`), losing those written after it: named properties of 285
+   messages of that older export. `ecm-pst` therefore reads the properties a
+   message's node itself holds from its bytes (`raw`: heap, tree and property
+   context, [MS-PST] 2.3.1 to 2.3.3): whole for a message without a sub-node
+   tree, and to fill what `outlook-pst` left out for the others. Checked on both
+   exports by reading 21,000 messages both ways: 2.3 million properties, all
+   equal (an opt-in test, `ECM_TEST_PST`). Worth fixing upstream.
 2. **Calendar** ([MS-OXOCAL]): start and end in UTC (`PidLidAppointmentStartWhole`,
    `PidLidAppointmentEndWhole`), the zone from
    `PidLidAppointmentTimeZoneDefinitionStartDisplay` (a `TZDEFINITION` whose key
@@ -325,8 +333,9 @@ they are. Same method: a fidelity test first, then plans, then a check.
      disagree; a company's card has no display name, so contacts are also
      matched by file-as, company and mobile phone.
 
-   Left for M10: series exceptions (the PSTs at hand had none) and tasks (none
-   readable).
+   Left for M10: series exceptions (the PSTs at hand had none) and a trial of
+   tasks (35 are readable since items without a sub-node tree are read; their
+   conversion was checked in a dry run only).
 7. **Series exceptions**, for both targets, last: the series is created, then
    each modified occurrence of the copy updated and each deleted occurrence of the
    copy removed. Only occurrences of a series `ecm` has just created are removed.
@@ -347,7 +356,9 @@ they are. Same method: a fidelity test first, then plans, then a check.
 - `outlook-pst` 1.2 refuses messages without a sub-node tree ("Missing Sub-Node Tree
   on message"), which MS-PST allows and which is common for contacts, appointments and
   tasks. The inventory falls back to the folder's contents table row for them; a few
-  still fail and are reported. Worth fixing upstream.
+  still fail and are reported. Calendar items, contacts and tasks are read from their
+  node's bytes instead (see [PST as a source](#pst-as-a-source-for-calendar-items-contacts-and-tasks)).
+  Worth fixing upstream.
 - Bodies can be silently degraded: on a real mailbox, about 68,000 copies had their
   HTML body stored as a plain-text body (`PR_NATIVE_BODY_INFO` = 1), so clients show
   raw HTML. PSTs rarely store `PR_NATIVE_BODY_INFO`; the inventory derives it from the

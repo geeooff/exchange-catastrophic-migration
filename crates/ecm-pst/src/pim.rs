@@ -10,6 +10,7 @@ use std::{
 };
 
 use outlook_pst::{
+    PstFile,
     ltp::prop_context::{GuidValue, PropertyValue},
     messaging::{
         attachment::{Attachment as _, AttachmentData, UnicodeAttachment},
@@ -17,10 +18,14 @@ use outlook_pst::{
         named_prop::{NamedPropertyGuid, NamedPropertyId},
         store::EntryId,
     },
-    ndb::node_id::NodeId,
+    ndb::{node_id::NodeId, page::NodeBTreeEntry},
 };
 
-use crate::{PstSource, Result, row_properties};
+use crate::{
+    PstSource, Result,
+    raw::{self, Raw},
+    row_properties,
+};
 
 /// A property set ([MS-OXPROPS]) as a number: `00062002-0000-0000-C000-000000000046`
 /// is `0x00062002_0000_0000_C000_000000000046`.
@@ -408,7 +413,7 @@ fn windows_1252_controls(text: &str) -> String {
 pub struct PimItems {
     /// The items read.
     pub items: Vec<Item>,
-    /// The items `outlook-pst` could not read, with why.
+    /// The items that could not be read, with why.
     pub unreadable: Vec<String>,
     /// The folders not read, with how many items they hold.
     pub set_aside: Vec<(String, usize)>,
@@ -460,8 +465,7 @@ impl PstSource {
     /// is named, of the folders of exactly the class `IPF.Appointment`,
     /// `IPF.Contact` or `IPF.Task` but those under Deleted Items, Recoverable
     /// Items, Sync Issues and Junk Email, which are listed as set aside. An
-    /// item `outlook-pst` cannot read (a message without a sub-node tree) is
-    /// listed, not read. Only Unicode PSTs.
+    /// item that cannot be read is listed. Only Unicode PSTs.
     pub fn pim_items(&self, folders: &[String]) -> Result<PimItems> {
         let names = Rc::new(self.named_ids()?);
         let entry_id = self
@@ -561,9 +565,30 @@ impl PstSource {
             .unicode
             .as_ref()
             .ok_or_else(|| io::Error::other("reading whole items needs a Unicode PST"))?;
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| io::Error::other("reading whole items needs a Unicode PST"))?;
+        // The properties the message's node itself holds, read from its bytes.
+        // `outlook-pst` 1.2 refuses a message without a sub-node tree (no
+        // recipient and no attachment), which the format allows; and it stops
+        // reading a node's properties at one whose type it does not know (a
+        // server id), losing those written after it.
+        let entry = file.read_node(node)?;
+        let own = file
+            .read_block(entry.data())
+            .and_then(|data| raw::property_context(&data));
+        if entry.sub_node().is_none() {
+            return bare_item(own?, names);
+        }
         let entry_id = self.store.properties().make_entry_id(node)?;
         let message = UnicodeMessage::read(unicode.clone(), &entry_id, None)?;
         let mut item = item_from(message.as_ref(), names)?;
+        for (id, property) in own.unwrap_or_default() {
+            if let Raw::Value(value) = property {
+                item.properties.values.entry(id).or_insert(value);
+            }
+        }
         if let Some(table) = message.attachment_table() {
             for row in table.rows_matrix() {
                 let sub_node = NodeId::from(u32::from(row.id()));
@@ -595,6 +620,25 @@ impl PstSource {
     }
 }
 
+/// A message without a sub-node tree, from the properties of its node: it has no
+/// recipient and no attachment.
+fn bare_item(own: BTreeMap<u16, Raw>, names: &Rc<HashMap<Name, u16>>) -> io::Result<Item> {
+    let values = own
+        .into_iter()
+        .map(|(id, property)| match property {
+            Raw::Value(value) => Ok((id, value)),
+            Raw::SubNode(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("property {id:04x} is in a sub-node the message does not have"),
+            )),
+        })
+        .collect::<io::Result<BTreeMap<u16, Value>>>()?;
+    Ok(Item {
+        properties: Properties::new(values, names.clone()),
+        ..Item::default()
+    })
+}
+
 /// The properties and recipients of a message; its attachments are read by the
 /// caller (an embedded message's are not read).
 fn item_from(message: &dyn Message, names: &Rc<HashMap<Name, u16>>) -> io::Result<Item> {
@@ -623,6 +667,132 @@ fn property_set(guid: &GuidValue) -> PropertySet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads the messages of a real PST both ways, with `outlook-pst` and from
+    /// each node's bytes, and compares every property the node itself holds.
+    /// Not run by default: name the file in `ECM_TEST_PST`, and the most
+    /// messages to read in each folder in `ECM_TEST_PST_LIMIT` (300). Prints
+    /// counts, message classes and property ids only.
+    #[test]
+    #[ignore = "needs a real PST, named in ECM_TEST_PST"]
+    fn raw_reading_agrees_with_outlook_pst() {
+        let Ok(path) = std::env::var("ECM_TEST_PST") else {
+            return;
+        };
+        let limit = std::env::var("ECM_TEST_PST_LIMIT")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(300);
+        let source = PstSource::open(&path).unwrap();
+        let file = source.file.clone().unwrap();
+        let unicode = source.unicode.clone().unwrap();
+        let root = source.store.properties().ipm_sub_tree_entry_id().unwrap();
+        let mut folders = vec![root];
+        let (mut messages, mut bare, mut compared, mut in_sub_nodes) = (0, 0, 0, 0);
+        let mut differences = Vec::new();
+        // What `outlook-pst` does not give although the node holds it.
+        let mut dropped: BTreeMap<String, usize> = BTreeMap::new();
+        let mut dropped_by_class: BTreeMap<String, usize> = BTreeMap::new();
+        while let Some(entry_id) = folders.pop() {
+            let folder = source.store.open_folder(&entry_id).unwrap();
+            if let Some(hierarchy) = folder.hierarchy_table() {
+                for row in hierarchy.rows_matrix() {
+                    let node = NodeId::from(u32::from(row.id()));
+                    folders.push(source.store.properties().make_entry_id(node).unwrap());
+                }
+            }
+            let Some(contents) = folder.contents_table() else {
+                continue;
+            };
+            for row in contents.rows_matrix().take(limit) {
+                let node = NodeId::from(u32::from(row.id()));
+                let key = u32::from(node);
+                let entry = file.read_node(node).unwrap();
+                let data = file.read_block(entry.data()).unwrap();
+                let raw = match raw::property_context(&data) {
+                    Ok(raw) => raw,
+                    Err(error) => {
+                        differences.push(format!("{key:08x}: {error}"));
+                        continue;
+                    }
+                };
+                messages += 1;
+                if entry.sub_node().is_none() {
+                    bare += 1;
+                    continue;
+                }
+                let id = source.store.properties().make_entry_id(node).unwrap();
+                let Ok(message) = UnicodeMessage::read(unicode.clone(), &id, None) else {
+                    continue;
+                };
+                let theirs = message.properties();
+                for (id, value) in theirs.iter() {
+                    match raw.get(id) {
+                        Some(Raw::Value(ours)) => {
+                            compared += 1;
+                            if *ours != Value::from_pst(value) {
+                                differences.push(format!("{key:08x}: property {id:04x}"));
+                            }
+                        }
+                        Some(Raw::SubNode(_)) => in_sub_nodes += 1,
+                        None => differences.push(format!("{key:08x}: no property {id:04x}")),
+                    }
+                }
+                let mut any = false;
+                for (id, value) in &raw {
+                    if theirs.get(*id).is_some() {
+                        continue;
+                    }
+                    let kind = match value {
+                        Raw::SubNode(_) => "in a sub-node",
+                        Raw::Value(Value::Other) => "other",
+                        Raw::Value(Value::Text(_)) => "text",
+                        Raw::Value(Value::Binary(_)) => "binary",
+                        Raw::Value(Value::Integer(_)) => "integer",
+                        Raw::Value(Value::Bool(_)) => "boolean",
+                        Raw::Value(Value::Time(_)) => "time",
+                        Raw::Value(Value::Texts(_) | Value::Integers(_)) => "list",
+                    };
+                    *dropped.entry(format!("{id:04x} ({kind})")).or_default() += 1;
+                    any = true;
+                }
+                if any {
+                    let class = match raw.get(&PR_MESSAGE_CLASS) {
+                        Some(Raw::Value(Value::Text(class))) => class.clone(),
+                        _ => String::new(),
+                    };
+                    *dropped_by_class.entry(class).or_default() += 1;
+                }
+            }
+        }
+        println!("{messages} messages, {bare} of them without a sub-node tree");
+        println!("{compared} properties compared, {in_sub_nodes} more in sub-nodes");
+        println!("messages outlook-pst gives fewer properties for, by class: {dropped_by_class:?}");
+        println!("these properties, with how many messages: {dropped:?}");
+        let names: BTreeMap<u16, String> = source
+            .named_ids()
+            .unwrap()
+            .into_iter()
+            .map(|(name, id)| {
+                let name = match name {
+                    Name::Number(set, number) => format!("{set:032x}:{number:04x}"),
+                    Name::String(set, name) => format!("{set:032x}:{name}"),
+                };
+                (id, name)
+            })
+            .collect();
+        let named: Vec<&String> = dropped
+            .keys()
+            .filter_map(|key| u16::from_str_radix(&key[..4], 16).ok())
+            .filter_map(|id| names.get(&id))
+            .collect();
+        println!("their names: {named:?}");
+        println!("{} differences", differences.len());
+        for difference in differences.iter().take(40) {
+            println!("  {difference}");
+        }
+        assert!(differences.is_empty());
+    }
 
     #[test]
     fn reads_utf8_html_whatever_the_code_page_says() {
@@ -683,5 +853,34 @@ mod tests {
         );
         assert_eq!(props.categories(), ["Famille", "Amis"]);
         assert_eq!(props.named(PSETID_ADDRESS, 0x8208), None);
+    }
+
+    #[test]
+    fn builds_a_message_without_sub_nodes_from_its_node() {
+        let names: Rc<HashMap<Name, u16>> = Rc::new(
+            [(Name::Number(PSETID_TASK, 0x811C), 0x8001)]
+                .into_iter()
+                .collect(),
+        );
+        let own: BTreeMap<u16, Raw> = [
+            (PR_MESSAGE_CLASS, Raw::Value(Value::Text("IPM.Task".into()))),
+            (0x8001, Raw::Value(Value::Bool(true))),
+        ]
+        .into_iter()
+        .collect();
+        let item = bare_item(own.clone(), &names).unwrap();
+        assert_eq!(item.class(), "IPM.Task");
+        assert_eq!(
+            item.properties
+                .named(PSETID_TASK, 0x811C)
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(item.recipients.is_empty() && item.attachments.is_empty());
+
+        // A value that would be in a sub-node the message does not have.
+        let mut broken = own;
+        broken.insert(PR_BODY, Raw::SubNode(0x8025));
+        assert!(bare_item(broken, &names).is_err());
     }
 }
