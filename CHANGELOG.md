@@ -23,6 +23,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- A completed task copied into an Exchange mailbox, from Outlook.com or from a
+  PST, got the day of the copy as its completion date. It keeps its own.
 - PST calendar items, contacts and tasks without recipients or attachments were
   listed as unreadable ("Missing Sub-Node Tree"): 228 of the 640 of a real
   Outlook.com export, 34 of its 35 tasks. They are now read.

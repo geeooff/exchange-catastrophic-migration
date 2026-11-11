@@ -108,6 +108,9 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   after 15 minutes. Graph pages a folder's messages by offset: a message removed
   during the listing makes another slip between pages, so inventories read the
   ids again.
+- EWS `CreateItem` for a completed task: write `CompleteDate` and no `Status`.
+  Exchange applies the elements in order, and `Status` `Completed` after the date
+  sets it to the current day.
 - EWS `CreateItem` for calendar items: `SendMeetingInvitations="SendToNone"`, elements
   in schema order, local times with `StartTimeZone`/`EndTimeZone` (Windows ids). Read
   each Graph event again with `Prefer: outlook.timezone` in its own zone. The other

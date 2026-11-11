@@ -333,9 +333,18 @@ they are. Same method: a fidelity test first, then plans, then a check.
      disagree; a company's card has no display name, so contacts are also
      matched by file-as, company and mobile phone.
 
-   Left for M10: series exceptions (the PSTs at hand had none) and a trial of
-   tasks (35 are readable since items without a sub-node tree are read; their
-   conversion was checked in a dry run only).
+   Tasks, once items without a sub-node tree were read: the 35 of a real
+   Outlook.com export copied into the `ecm-test` task folder of the same
+   mailbox, 33 equal to the PST (status, importance, body, due and completion
+   dates). The first 2 showed that Exchange applies a task's elements in order:
+   `Status` `Completed` written after `CompleteDate` set that date to the
+   current day. A completed task is now written by its date alone. None of
+   these tasks had a recurrence or a reminder.
+
+   Left for M10: series exceptions. Neither PST at hand has any (16 and 21
+   series, none with a modified or deleted occurrence), so there is no real
+   source to test them on. Tasks into Outlook.com were checked in a dry run
+   only.
 7. **Series exceptions**, for both targets, last: the series is created, then
    each modified occurrence of the copy updated and each deleted occurrence of the
    copy removed. Only occurrences of a series `ecm` has just created are removed.
