@@ -70,7 +70,9 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 [^18]: Calendar, contacts and photos, tasks, inbox rules and categories: plans
     `ecm plan-graph-pim`, trial `ecm fidelity-graph-pim`.
 [^19]: Events go without their attendees: Graph would invite them. Series
-    exceptions are not copied.
+    exceptions (removed occurrences, and moved ones with their own time,
+    subject and location) are copied by `occurrence` steps, tested with
+    canned answers only: no source at hand had any.
 [^20]: Outlook.com can move a contact out of its folder when its photo is set
     (12 of 25 in a test, into a folder Graph cannot open): `ecm check-graph-pim
     --plan` finds such copies by id.
@@ -81,7 +83,7 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     or the folders named with `--folder` (an export can keep its calendar in
     Deleted Items). Tested on a PST of 539 calendar items and 166 contacts: a
     trial of 12 items into Outlook.com, all equal to the PST. Series exceptions
-    are listed, not copied; contact groups are not copied. Items without a
+    are copied as for an Exchange source[^19]; contact groups are not copied. Items without a
     sub-node tree (no recipient, no attachment), which `outlook-pst` 1.2
     refuses, are read from their node's bytes: 228 of the 640 items of a real
     Outlook.com export.
@@ -90,7 +92,11 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     class): 531 calendar items and 165 contacts equal to the PST, photos included.
     Exchange rebuilds the display name and file-as of a contact from its name's
     parts when they disagree (1 contact). Meetings keep their attendees only when
-    the user organized them; no invitation is sent.
+    the user organized them; no invitation is sent. Series exceptions
+    (removed occurrences, and moved ones with their own time, subject and
+    location) are copied by `occurrence` steps: no PST at hand had any, so
+    they were tested on a hand-made series in the `ecm-test` calendar, one
+    occurrence removed and one moved, read back as planned.
 [^25]: Tested on the 35 tasks of a PST copied into the `ecm-test` task folder of
     an Exchange 2019 mailbox (`--test`): status, importance, body, due and
     completion dates equal to the PST. None had a recurrence or a reminder.

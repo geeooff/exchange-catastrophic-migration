@@ -59,13 +59,17 @@ fn for_graph(action: &Action) -> bool {
             | Action::Move { .. }
             | Action::CreateGraph { .. }
             | Action::SetPhoto { .. }
+            | Action::Occurrence { .. }
     )
 }
 
 /// Whether a step writes other item types than messages: the run then asks for
 /// their permissions.
 fn needs_pim_scopes(action: &Action) -> bool {
-    matches!(action, Action::CreateGraph { .. } | Action::SetPhoto { .. })
+    matches!(
+        action,
+        Action::CreateGraph { .. } | Action::SetPhoto { .. } | Action::Occurrence { .. }
+    )
 }
 
 /// One plan of a run: its steps, journal, done and selected steps.
@@ -512,6 +516,32 @@ mod runner {
                             Err(error) => Err(error.to_string()),
                         }
                     }
+                },
+                Action::Occurrence {
+                    requires,
+                    original_start,
+                    change,
+                    ..
+                } => match self.done.get(requires).and_then(|line| line.id.clone()) {
+                    // Its series was not created: retried with it.
+                    None => Err("skipped".into()),
+                    Some(series) => self
+                        .call(|client| client.occurrence_of(&series, original_start))
+                        .and_then(|occurrence| {
+                            match change {
+                                Some(change) => self.call(|client| {
+                                    client.change_occurrence(
+                                        &occurrence,
+                                        &change.start,
+                                        &change.end,
+                                        change.subject.as_deref(),
+                                        change.location.as_deref(),
+                                    )
+                                }),
+                                None => self.call(|client| client.remove_occurrence(&occurrence)),
+                            }
+                            .map(|()| occurrence)
+                        }),
                 },
                 other => Err(format!("{} is not a step for Outlook.com", other.kind())),
             };

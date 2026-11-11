@@ -12,8 +12,8 @@ arrived after the migration.
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates, then checked every copy
 > against two PSTs. Through Microsoft Graph, it repaired an Outlook.com mailbox's
-> messages and copied calendar items, contacts, rules and categories into it; tasks,
-> notes and series exceptions are still to validate. See [docs/plan.md](docs/plan.md).
+> messages and copied calendar items, contacts, rules and categories into it; tasks
+> and notes are still to validate there. See [docs/plan.md](docs/plan.md).
 > What can be migrated, from which source to which target:
 > [docs/supported-migrations.md](docs/supported-migrations.md).
 
@@ -50,6 +50,7 @@ journals each step and resumes where it stopped.
    - `ecm plan-park`: move the reviewed `ecm-unmatched` folder into quarantine.
    - `ecm plan-discard [--run <name>]`: once you are sure, move quarantine run folders
      into Deleted Items, which you empty yourself. `ecm` never deletes anything.
+     With `--test`: the `ecm-test` folders the trials wrote into.
 4. **Apply**: `ecm apply --plan <file> [--dry-run] [--limit N]`.
 5. **Verify**: `ecm verify` inventories the target again and checks every source
    message has a healthy copy in its folder. `ecm check-content` compares each copy

@@ -578,14 +578,16 @@ pub fn calendar_item(item: &Item) -> (Element, Vec<String>) {
             .exceptions
             .iter()
             .map(|e| {
-                node(
-                    "Occurrence",
-                    vec![
-                        leaf("Start", to_utc(e.start)),
-                        leaf("End", to_utc(e.end)),
-                        leaf("OriginalStart", to_utc(e.original_start)),
-                    ],
-                )
+                let mut own = vec![
+                    leaf("Start", to_utc(e.start)),
+                    leaf("End", to_utc(e.end)),
+                    leaf("OriginalStart", to_utc(e.original_start)),
+                ];
+                // What the occurrence has of its own, as `ecm` reads it of an
+                // Exchange series too.
+                push(&mut own, "Subject", e.subject.as_deref());
+                push(&mut own, "Location", e.location.as_deref());
+                node("Occurrence", own)
             })
             .collect();
         if !occurrences.is_empty() {

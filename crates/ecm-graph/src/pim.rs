@@ -185,6 +185,18 @@ impl<T: Transport> GraphClient<T> {
         }))
     }
 
+    /// The occurrences of a series between two times (Unix seconds), each with
+    /// its type (`occurrence`, or `exception` for a modified one), its start
+    /// and end in UTC, and when the pattern placed it (`originalStart`).
+    pub fn instances(&self, series_id: &str, from: i64, to: i64) -> Result<Vec<Value>> {
+        self.get_all(&format!(
+            "/me/events/{}/instances?startDateTime={}&endDateTime={}&$select=id,type,start,end,originalStart&$top=100",
+            encode(series_id),
+            encode(&ecm_model::item::format_iso(from)),
+            encode(&ecm_model::item::format_iso(to)),
+        ))
+    }
+
     /// To Do lists.
     pub fn todo_lists(&self) -> Result<Vec<Value>> {
         self.get_all("/me/todo/lists?$top=100")

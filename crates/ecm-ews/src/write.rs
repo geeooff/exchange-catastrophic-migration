@@ -171,6 +171,28 @@ impl<T: Transport> EwsClient<T> {
             .ok_or_else(|| Error::MalformedResponse("CreateFolder returned no folder id".into()))
     }
 
+    /// Renames a folder. `class` is its class (`IPF.Contact`…): a calendar,
+    /// contact or task folder is changed as the folder type it is.
+    pub fn rename_folder(&self, folder_id: &str, class: Option<&str>, name: &str) -> Result<()> {
+        let element = match class {
+            Some("IPF.Appointment") => "CalendarFolder",
+            Some("IPF.Contact") => "ContactsFolder",
+            Some("IPF.Task") => "TasksFolder",
+            _ => "Folder",
+        };
+        let body = format!(
+            r#"<m:UpdateFolder><m:FolderChanges><t:FolderChange><t:FolderId Id="{}"/><t:Updates><t:SetFolderField><t:FieldURI FieldURI="folder:DisplayName"/><t:{element}><t:DisplayName>{}</t:DisplayName></t:{element}></t:SetFolderField></t:Updates></t:FolderChange></m:FolderChanges></m:UpdateFolder>"#,
+            escape(folder_id),
+            escape(name)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("UpdateFolder returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
     /// Moves a folder, with everything in it, into the Deleted Items folder. The
     /// user empties it, or not: nothing is deleted here.
     pub fn move_folder_to_deleted_items(&self, folder_id: &str) -> Result<()> {
@@ -425,9 +447,143 @@ impl<T: Transport> EwsClient<T> {
     }
 }
 
+/// What a modified occurrence of a series has of its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OccurrenceChange<'a> {
+    /// Its start, UTC (`2024-12-30T03:19:13Z`).
+    pub start: &'a str,
+    /// Its end, UTC.
+    pub end: &'a str,
+    /// Its subject, when not the series'.
+    pub subject: Option<&'a str>,
+    /// Its location, when not the series'.
+    pub location: Option<&'a str>,
+}
+
+/// Half the width of the window an occurrence is looked for in: series recur
+/// by the day at the least, so the window holds one unchanged occurrence.
+const OCCURRENCE_WINDOW: i64 = 12 * 3600;
+
+impl<T: Transport> EwsClient<T> {
+    /// The id of the occurrence of a series that its pattern places at
+    /// `original_start` (UTC): the occurrence of the series' `UID` in the
+    /// calendar view of `folder_id` around that time, one not yet changed
+    /// rather than one moved there. Only reads.
+    pub fn occurrence_of(
+        &self,
+        folder_id: &str,
+        series_id: &str,
+        original_start: &str,
+    ) -> Result<String> {
+        let at = ecm_model::item::parse_utc(original_start).ok_or_else(|| {
+            Error::MalformedResponse(format!("{original_start:?} is not a UTC time"))
+        })?;
+        let body = format!(
+            r#"<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="calendar:UID"/></t:AdditionalProperties></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds></m:GetItem>"#,
+            escape(series_id)
+        );
+        let series = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("GetItem returned no message".into()))?
+            .into_result()?;
+        let uid = series
+            .element
+            .child("Items")
+            .and_then(|items| items.children.first())
+            .and_then(|item| item.child_text("UID"))
+            .map(str::to_owned)
+            .ok_or_else(|| Error::MalformedResponse("the series has no UID".into()))?;
+
+        let body = format!(
+            r#"<m:FindItem Traversal="Shallow"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="calendar:Start"/><t:FieldURI FieldURI="calendar:UID"/><t:FieldURI FieldURI="calendar:CalendarItemType"/></t:AdditionalProperties></m:ItemShape><m:CalendarView StartDate="{}" EndDate="{}"/><m:ParentFolderIds><t:FolderId Id="{}"/></m:ParentFolderIds></m:FindItem>"#,
+            ecm_model::item::format_iso(at - OCCURRENCE_WINDOW + 1),
+            ecm_model::item::format_iso(at + OCCURRENCE_WINDOW - 1),
+            escape(folder_id)
+        );
+        let view = self
+            .call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("FindItem returned no message".into()))?
+            .into_result()?;
+        let mut found = Vec::new();
+        view.element.descendants_named("CalendarItem", &mut found);
+        // (starts at the original time, not yet changed, id)
+        let mut candidates: Vec<(bool, bool, &str)> = found
+            .into_iter()
+            .filter(|item| item.child_text("UID") == Some(uid.as_str()))
+            .filter_map(|item| {
+                let id = item.child("ItemId")?.attribute("Id")?;
+                let start = item
+                    .child_text("Start")
+                    .and_then(ecm_model::item::parse_utc)?;
+                let unchanged = item.child_text("CalendarItemType") == Some("Occurrence");
+                Some((start == at, unchanged, id))
+            })
+            .collect();
+        // The one at the original time first, an unchanged one before a moved
+        // one.
+        candidates.sort_by_key(|(on_time, unchanged, _)| (!on_time, !unchanged));
+        match candidates.as_slice() {
+            [(true, _, id), ..] | [(false, true, id)] => Ok((*id).to_owned()),
+            _ => Err(Error::MalformedResponse(format!(
+                "no occurrence of the series at {original_start}"
+            ))),
+        }
+    }
+
+    /// Removes one occurrence of a series, by its own id, into the Deleted
+    /// Items folder: the series keeps it as a deleted occurrence. No
+    /// cancellation is sent.
+    pub fn remove_occurrence(&self, occurrence_id: &str) -> Result<()> {
+        let body = format!(
+            r#"<m:DeleteItem DeleteType="MoveToDeletedItems" SendMeetingCancellations="SendToNone"><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds></m:DeleteItem>"#,
+            escape(occurrence_id)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("DeleteItem returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+
+    /// Gives one occurrence of a series, by its own id, a start, an end and
+    /// maybe a subject and a location of its own. No invitation is sent.
+    pub fn change_occurrence(&self, occurrence_id: &str, change: &OccurrenceChange) -> Result<()> {
+        let set = |uri: &str, name: &str, value: &str| {
+            format!(
+                r#"<t:SetItemField><t:FieldURI FieldURI="{uri}"/><t:CalendarItem><t:{name}>{}</t:{name}></t:CalendarItem></t:SetItemField>"#,
+                escape(value)
+            )
+        };
+        let mut updates = String::new();
+        if let Some(subject) = change.subject {
+            updates += &set("item:Subject", "Subject", subject);
+        }
+        updates += &set("calendar:Start", "Start", change.start);
+        updates += &set("calendar:End", "End", change.end);
+        if let Some(location) = change.location {
+            updates += &set("calendar:Location", "Location", location);
+        }
+        let body = format!(
+            r#"<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="SendToNone"><m:ItemChanges><t:ItemChange><t:ItemId Id="{}"/><t:Updates>{updates}</t:Updates></t:ItemChange></m:ItemChanges></m:UpdateItem>"#,
+            escape(occurrence_id)
+        );
+        self.call(&body)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedResponse("UpdateItem returned no message".into()))?
+            .into_result()
+            .map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ExtendedValue;
+    use super::{ExtendedValue, OccurrenceChange};
     use crate::{
         EwsClient,
         testing::{FakeTransport, soap},
@@ -532,6 +688,20 @@ mod tests {
     }
 
     #[test]
+    fn renames_a_typed_folder_as_its_type() {
+        let fake = FakeTransport::new([(
+            200,
+            soap(
+                r#"<m:UpdateFolderResponse><m:ResponseMessages><m:UpdateFolderResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Folders><t:ContactsFolder><t:FolderId Id="F1"/></t:ContactsFolder></m:Folders></m:UpdateFolderResponseMessage></m:ResponseMessages></m:UpdateFolderResponse>"#,
+            ),
+        )]);
+        EwsClient::new(&fake)
+            .rename_folder("F1", Some("IPF.Contact"), "ecm-test (Contacts)")
+            .unwrap();
+        assert!(fake.requests.borrow()[0].contains(r#"<t:FolderId Id="F1"/><t:Updates><t:SetFolderField><t:FieldURI FieldURI="folder:DisplayName"/><t:ContactsFolder><t:DisplayName>ecm-test (Contacts)</t:DisplayName></t:ContactsFolder></t:SetFolderField></t:Updates>"#));
+    }
+
+    #[test]
     fn moves_a_folder_to_deleted_items() {
         let fake = FakeTransport::new([(
             200,
@@ -625,5 +795,112 @@ mod tests {
         assert_eq!(results[0].as_deref().unwrap(), "U1");
         assert!(results[1].is_err());
         assert!(fake.requests.borrow()[0].contains(r#"<t:Item CreateAction="CreateNew"><t:ParentFolderId Id="F"/><t:Data>AQI=</t:Data></t:Item>"#));
+    }
+
+    /// The answers to the two requests `occurrence_of` makes: the series' UID,
+    /// then the calendar view.
+    fn series_and_view(view: &str) -> [(u16, String); 2] {
+        [
+            (
+                200,
+                soap(
+                    r#"<m:GetItemResponse><m:ResponseMessages><m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:CalendarItem><t:ItemId Id="S1"/><t:UID>uid-1</t:UID></t:CalendarItem></m:Items></m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>"#,
+                ),
+            ),
+            (
+                200,
+                soap(&format!(
+                    r#"<m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:RootFolder TotalItemsInView="3" IncludesLastItemInRange="true"><t:Items>{view}</t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"#
+                )),
+            ),
+        ]
+    }
+
+    fn in_view(id: &str, start: &str, uid: &str, kind: &str) -> String {
+        format!(
+            r#"<t:CalendarItem><t:ItemId Id="{id}"/><t:Start>{start}</t:Start><t:CalendarItemType>{kind}</t:CalendarItemType><t:UID>{uid}</t:UID></t:CalendarItem>"#
+        )
+    }
+
+    #[test]
+    fn finds_the_occurrence_of_a_series_at_its_original_time() {
+        // Another series at the same time, an occurrence of this one moved
+        // nearby, and the one looked for.
+        let view = [
+            in_view("X", "2024-05-06T08:00:00Z", "uid-2", "Occurrence"),
+            in_view("M", "2024-05-06T10:00:00Z", "uid-1", "Exception"),
+            in_view("O", "2024-05-06T08:00:00Z", "uid-1", "Occurrence"),
+        ]
+        .concat();
+        let fake = FakeTransport::new(series_and_view(&view));
+        let id = EwsClient::new(&fake)
+            .occurrence_of("CAL", "S1", "2024-05-06T08:00:00Z")
+            .unwrap();
+        assert_eq!(id, "O");
+        let requests = fake.requests.borrow();
+        assert!(requests[0].contains(r#"<t:FieldURI FieldURI="calendar:UID"/>"#));
+        assert!(requests[0].contains(r#"<t:ItemId Id="S1"/>"#));
+        assert!(requests[1].contains(
+            r#"<m:CalendarView StartDate="2024-05-05T20:00:01Z" EndDate="2024-05-06T19:59:59Z"/><m:ParentFolderIds><t:FolderId Id="CAL"/>"#
+        ));
+    }
+
+    #[test]
+    fn takes_the_only_unchanged_occurrence_near_and_refuses_a_guess() {
+        // An all-day series whose day starts an hour off: the only unchanged
+        // occurrence in the window is the one.
+        let near = in_view("O", "2024-05-05T23:00:00Z", "uid-1", "Occurrence");
+        let fake = FakeTransport::new(series_and_view(&near));
+        let id = EwsClient::new(&fake)
+            .occurrence_of("CAL", "S1", "2024-05-06T00:00:00Z")
+            .unwrap();
+        assert_eq!(id, "O");
+
+        // Nothing of the series, or only an occurrence already moved: refused.
+        for view in [
+            in_view("X", "2024-05-06T00:00:00Z", "uid-2", "Occurrence"),
+            in_view("M", "2024-05-06T03:00:00Z", "uid-1", "Exception"),
+        ] {
+            let fake = FakeTransport::new(series_and_view(&view));
+            assert!(
+                EwsClient::new(&fake)
+                    .occurrence_of("CAL", "S1", "2024-05-06T00:00:00Z")
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn removes_and_changes_an_occurrence_without_telling_anyone() {
+        let fake = FakeTransport::new([
+            (
+                200,
+                soap(
+                    r#"<m:DeleteItemResponse><m:ResponseMessages><m:DeleteItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:DeleteItemResponseMessage></m:ResponseMessages></m:DeleteItemResponse>"#,
+                ),
+            ),
+            (
+                200,
+                soap(
+                    r#"<m:UpdateItemResponse><m:ResponseMessages><m:UpdateItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:CalendarItem><t:ItemId Id="O2"/></t:CalendarItem></m:Items></m:UpdateItemResponseMessage></m:ResponseMessages></m:UpdateItemResponse>"#,
+                ),
+            ),
+        ]);
+        let client = EwsClient::new(&fake);
+        client.remove_occurrence("O1").unwrap();
+        client
+            .change_occurrence(
+                "O2",
+                &OccurrenceChange {
+                    start: "2024-05-13T10:00:00Z",
+                    end: "2024-05-13T11:00:00Z",
+                    subject: Some("Yoga & co"),
+                    location: None,
+                },
+            )
+            .unwrap();
+        let requests = fake.requests.borrow();
+        assert!(requests[0].contains(r#"<m:DeleteItem DeleteType="MoveToDeletedItems" SendMeetingCancellations="SendToNone"><m:ItemIds><t:ItemId Id="O1"/></m:ItemIds></m:DeleteItem>"#));
+        assert!(requests[1].contains(r#"<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="SendToNone"><m:ItemChanges><t:ItemChange><t:ItemId Id="O2"/><t:Updates><t:SetItemField><t:FieldURI FieldURI="item:Subject"/><t:CalendarItem><t:Subject>Yoga &amp; co</t:Subject></t:CalendarItem></t:SetItemField><t:SetItemField><t:FieldURI FieldURI="calendar:Start"/><t:CalendarItem><t:Start>2024-05-13T10:00:00Z</t:Start></t:CalendarItem></t:SetItemField><t:SetItemField><t:FieldURI FieldURI="calendar:End"/><t:CalendarItem><t:End>2024-05-13T11:00:00Z</t:End></t:CalendarItem></t:SetItemField></t:Updates>"#));
     }
 }

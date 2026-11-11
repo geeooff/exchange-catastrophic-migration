@@ -259,7 +259,9 @@ Milestone M9b, after messages (M9). Same method: a fidelity test first, then pla
      plan's journal (`--plan`), and deleting the test folder does not remove them;
    - Graph keeps an all-day event as days, in UTC: such events compare by day.
 
-   Left for M9b: series exceptions, tasks and notes (the test source had none).
+   Left for M9b: tasks and notes (the test source had none). Series
+   exceptions: see [PST as a source](#pst-as-a-source-for-calendar-items-contacts-and-tasks),
+   point 7.
 
 ### PST as a source for calendar items, contacts and tasks
 
@@ -341,13 +343,36 @@ they are. Same method: a fidelity test first, then plans, then a check.
    current day. A completed task is now written by its date alone. None of
    these tasks had a recurrence or a reminder.
 
-   Left for M10: series exceptions. Neither PST at hand has any (16 and 21
-   series, none with a modified or deleted occurrence), so there is no real
-   source to test them on. Tasks into Outlook.com were checked in a dry run
-   only.
-7. **Series exceptions**, for both targets, last: the series is created, then
-   each modified occurrence of the copy updated and each deleted occurrence of the
-   copy removed. Only occurrences of a series `ecm` has just created are removed.
+   Left for M10: tasks into Outlook.com were checked in a dry run only.
+7. **Series exceptions**, for both targets: the series is created, then an
+   `occurrence` step for each exception of its source removes or changes one
+   occurrence of the copy, found by the time the pattern places it. Removals
+   come first, so that none is taken for an occurrence moved near it. Only
+   occurrences of a series the plan itself created are touched; a removed one
+   goes to Deleted Items, and no one is told. A modified occurrence keeps its
+   own time, subject and location: its own body, attendees, reminder or
+   free/busy status are not copied.
+   - Exchange: the occurrence is the one of the series' `UID` in a calendar
+     view of a day around that time (`FindItem`), then `DeleteItem`
+     (`MoveToDeletedItems`, `SendToNone`) or `UpdateItem`. `ecm check-pim`
+     compares each series' exceptions; `ecm target series` lists them.
+   - Outlook.com: the occurrence is among the series' `instances` around that
+     time, then `DELETE` or `PATCH`. `ecm check-graph-pim` reads the copy's
+     instances around the source's exceptions and compares them.
+   - Sources: a PST (the exceptions of `PidLidAppointmentRecur`) and an
+     Exchange mailbox (the series' modified and deleted occurrences, each
+     modified one read for its own subject and location).
+
+   Neither PST at hand has a series with an exception (16 and 21 series), so
+   no real source could be copied. Tested instead on a hand-made plan against
+   an Exchange 2019 mailbox, in its `ecm-test` calendar: a weekly series of 6
+   occurrences, one removed, one moved to the next day with its own subject
+   and location; read back, the series has exactly these two exceptions. The
+   same against Outlook.com is still to run.
+8. **Clearing the trials**: `ecm plan-discard --test` plans the move of every
+   `ecm-test` folder into Deleted Items, which the user empties. Deleted Items
+   takes one folder of a name: each is first named after its parent
+   (`ecm-test (Contacts)`).
 
 ## 8. Testing
 

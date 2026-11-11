@@ -333,8 +333,12 @@ pub fn plan_steps(
         }
         let (json, lost) = graph_event(item);
         let subject = field(item, "Subject");
+        let step = actions.len();
+        let (steps, note) = crate::pst_pim_cmd::occurrence_steps(item, step, &to);
         notes.extend(
             lost.iter()
+                .filter(|l| !crate::pst_pim_cmd::is_occurrence_note(l))
+                .chain(note.iter())
                 .map(|l| format!("event {}: {l}", quoted(&subject))),
         );
         actions.push(Action::CreateGraph {
@@ -343,6 +347,7 @@ pub fn plan_steps(
             subject,
             item: json.to_string(),
         });
+        actions.extend(steps);
     }
     present("events", found, &mut notes);
 
@@ -696,6 +701,118 @@ mod online {
         }
     }
 
+    /// The exceptions of a series copy, written as
+    /// [`exceptions_text`](crate::pst_pim_cmd::exceptions_text) writes its
+    /// source's: the occurrences the source removed that the copy lacks too,
+    /// and the copy's modified occurrences.
+    fn copy_exceptions<T: Transport>(
+        graph: &GraphClient<T>,
+        series_id: &str,
+        source: &Element,
+    ) -> Result<String, String> {
+        let list = |name: &str| {
+            source
+                .child(name)
+                .map(|list| list.children.as_slice())
+                .unwrap_or_default()
+        };
+        let removed: Vec<i64> = list("DeletedOccurrences")
+            .iter()
+            .filter_map(|o| ecm_model::item::parse_utc(o.child_text("Start")?))
+            .collect();
+        let times: Vec<i64> = list("ModifiedOccurrences")
+            .iter()
+            .flat_map(|o| {
+                ["Start", "End", "OriginalStart"]
+                    .into_iter()
+                    .filter_map(|name| ecm_model::item::parse_utc(o.child_text(name)?))
+            })
+            .chain(removed.iter().copied())
+            .collect();
+        let (Some(from), Some(to)) = (times.iter().min(), times.iter().max()) else {
+            return Ok(String::new());
+        };
+        let instances = graph
+            .instances(series_id, from - 86_400, to + 86_400)
+            .map_err(|e| e.to_string())?;
+        let utc = |value: &Value| {
+            value["dateTime"]
+                .as_str()
+                .and_then(|text| ecm_model::item::parse_utc(&format!("{text}Z")))
+        };
+        // When the pattern placed an occurrence.
+        let original = |instance: &Value| {
+            instance["originalStart"]
+                .as_str()
+                .and_then(ecm_model::item::parse_utc)
+                .or_else(|| utc(&instance["start"]))
+        };
+        let iso = ecm_model::item::format_iso;
+        let mut lines: Vec<String> = removed
+            .iter()
+            .filter(|at| !instances.iter().any(|i| original(i) == Some(**at)))
+            .map(|at| format!("{} removed", iso(*at)))
+            .collect();
+        for instance in &instances {
+            if instance["type"].as_str() != Some("exception") {
+                continue;
+            }
+            if let (Some(original), Some(start), Some(end)) = (
+                original(instance),
+                utc(&instance["start"]),
+                utc(&instance["end"]),
+            ) {
+                lines.push(format!(
+                    "{} moved to {} until {}",
+                    iso(original),
+                    iso(start),
+                    iso(end)
+                ));
+            }
+        }
+        lines.sort();
+        Ok(lines.join("; "))
+    }
+
+    /// Gives each modified occurrence a series lists its own subject and
+    /// location, read from the occurrence itself.
+    fn with_occurrences<T: ecm_ews::Transport>(
+        client: &ecm_ews::EwsClient<T>,
+        items: &mut [Element],
+    ) -> Result<(), String> {
+        for item in items {
+            let Some(list) = item
+                .children
+                .iter_mut()
+                .find(|child| child.name == "ModifiedOccurrences")
+            else {
+                continue;
+            };
+            let ids: Vec<String> = list
+                .children
+                .iter()
+                .filter_map(|o| o.child("ItemId")?.attribute("Id"))
+                .map(str::to_owned)
+                .collect();
+            if ids.is_empty() || ids.len() != list.children.len() {
+                continue;
+            }
+            let whole = client.items_by_id(&ids).map_err(|e| e.to_string())?;
+            for (occurrence, whole) in list.children.iter_mut().zip(whole) {
+                for name in ["Subject", "Location"] {
+                    if let Some(text) = whole.child_text(name) {
+                        occurrence.children.push(Element {
+                            name: name.into(),
+                            text: text.into(),
+                            ..Element::default()
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn read_source<T: ecm_ews::Transport>(
         client: &ecm_ews::EwsClient<T>,
         options: PimOptions,
@@ -712,7 +829,10 @@ mod online {
             let folder = client
                 .get_distinguished_folder(distinguished)
                 .map_err(|e| e.to_string())?;
-            let items = client.full_items(&folder.id).map_err(|e| e.to_string())?;
+            let mut items = client.full_items(&folder.id).map_err(|e| e.to_string())?;
+            if kind == PimKind::Event {
+                with_occurrences(client, &mut items)?;
+            }
             keep(&mut source, kind, items, distinguished, options);
         }
         if options.wants(PimKind::Rule) {
@@ -989,6 +1109,47 @@ mod online {
                     same_event,
                 ),
             );
+            // The exceptions of series: each copy's occurrences are read
+            // around those its source changed or removed.
+            let props: Vec<PropertyMap> = sources.iter().map(|(_, p)| p.clone()).collect();
+            let pairs = pair(
+                &props,
+                &copies,
+                EVENT_COMPARED,
+                same_event_strictly,
+                same_event,
+            );
+            let (mut series, mut equal) = (0, 0);
+            let mut lines = Vec::new();
+            for ((event, (subject, _)), paired) in source.events.iter().zip(&sources).zip(pairs) {
+                let expected = crate::pst_pim_cmd::exceptions_text(event);
+                if expected.is_empty() {
+                    continue;
+                }
+                series += 1;
+                let Some(id) = paired.and_then(|n| target.events[n]["id"].as_str()) else {
+                    lines.push(format!(
+                        "  no copy of {subject:?} to read the exceptions of"
+                    ));
+                    continue;
+                };
+                let found = copy_exceptions(&graph, id, event)?;
+                if found == expected {
+                    equal += 1;
+                } else {
+                    lines.push(format!(
+                        "  different {subject:?}: exceptions {expected:?} in the source, {found:?} in the copy"
+                    ));
+                }
+            }
+            if series > 0 {
+                println!(
+                    "series exceptions: {series} series with exceptions in the source, {equal} with the same in their copy"
+                );
+                for line in lines {
+                    println!("{line}");
+                }
+            }
         }
         if options.wants(PimKind::Contact) {
             let mut sources = Vec::new();

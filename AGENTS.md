@@ -36,8 +36,9 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   read access only.
 - On a target: no hard delete (quarantine instead), and changes only through
   `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
-  folders leave only through `plan-discard`, into Deleted Items: the user empties
-  it. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
+  folders and `ecm-test` folders (`--test`) leave only through `plan-discard`,
+  into Deleted Items: the user empties it. An `occurrence` step removes or
+  changes one occurrence, only of a series its own plan created. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
   `ecm fidelity-graph-pim`, which only create items, only in `ecm-test` containers
   (and rules, disabled, and categories named `ecm-test …`), each run with the user's
   go-ahead.
@@ -108,6 +109,11 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   after 15 minutes. Graph pages a folder's messages by offset: a message removed
   during the listing makes another slip between pages, so inventories read the
   ids again.
+- An occurrence of a series is found by the time its pattern places it: in
+  EWS, by the series' `UID` in a `CalendarView` of a day around it (an occurrence
+  has its own item id); in Graph, among `/events/{id}/instances`. Deleted Items
+  takes one folder of a name: `MoveFolder` of a second `ecm-test` answers
+  `ErrorMoveCopyFailed`, so each is renamed after its parent first.
 - EWS `CreateItem` for a completed task: write `CompleteDate` and no `Status`.
   Exchange applies the elements in order, and `Status` `Completed` after the date
   sets it to the current day.

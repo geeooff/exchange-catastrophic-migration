@@ -569,8 +569,12 @@ enum Command {
         ews: EwsArgs,
         /// Run folder names under `ecm-quarantine` (e.g. `2026-01-01-12-00`);
         /// every run when left out.
-        #[arg(long = "run", value_name = "NAME")]
+        #[arg(long = "run", value_name = "NAME", conflicts_with = "test")]
         runs: Vec<String>,
+        /// Instead: the `ecm-test` folders the trials wrote into (calendar,
+        /// contacts, tasks, mail), wherever they are.
+        #[arg(long)]
+        test: bool,
         /// Plan file to write.
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
@@ -643,6 +647,16 @@ enum TargetCommand {
     Pim {
         #[command(flatten)]
         ews: EwsArgs,
+    },
+    /// List the series of a calendar folder with their modified and deleted
+    /// occurrences. Only reads.
+    Series {
+        #[command(flatten)]
+        ews: EwsArgs,
+        /// The calendar folder, by path (such as `Calendar/ecm-test`). The
+        /// default calendar when absent.
+        #[arg(long, value_name = "PATH")]
+        folder: Option<String>,
     },
 }
 
@@ -815,6 +829,9 @@ fn run() -> ExitCode {
             save,
         }) => report(target_show(&ews, &ids, attachments, save.as_deref())),
         Command::Target(TargetCommand::Pim { ews }) => report(target_pim(&ews)),
+        Command::Target(TargetCommand::Series { ews, folder }) => {
+            report(target_series(&ews, folder.as_deref()))
+        }
         Command::Backup { ews, out } => report(backup(&ews, out)),
         Command::Inventory {
             work,
@@ -1061,9 +1078,12 @@ fn run() -> ExitCode {
             &ews,
             reuse_inventory,
         )),
-        Command::PlanDiscard { ews, runs, out } => {
-            report(plan_cmd::discard_command(&ews, &runs, &out))
-        }
+        Command::PlanDiscard {
+            ews,
+            runs,
+            test,
+            out,
+        } => report(plan_cmd::discard_command(&ews, &runs, test, &out)),
     }
 }
 
@@ -1076,6 +1096,72 @@ fn report(outcome: Result<(), String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn target_series(ews: &EwsArgs, folder: Option<&str>) -> Result<(), String> {
+    let client = connect(ews)?;
+    let folder_id = match folder {
+        None => {
+            client
+                .get_distinguished_folder("calendar")
+                .map_err(|e| e.to_string())?
+                .id
+        }
+        Some(path) => client
+            .folder_tree("msgfolderroot")
+            .map_err(|e| e.to_string())?
+            .with_paths()
+            .into_iter()
+            .find(|(found, _)| found.eq_ignore_ascii_case(path) || found == path)
+            .map(|(_, folder)| folder.id.clone())
+            .ok_or_else(|| format!("no folder {path:?} in the mailbox"))?,
+    };
+    let items = client.full_items(&folder_id).map_err(|e| e.to_string())?;
+    let series: Vec<_> = items
+        .iter()
+        .filter(|item| item.child("Recurrence").is_some())
+        .collect();
+    println!("{} items, {} series", items.len(), series.len());
+    for item in series {
+        let modified = item
+            .child("ModifiedOccurrences")
+            .map(|list| list.children.as_slice())
+            .unwrap_or_default();
+        let deleted = item
+            .child("DeletedOccurrences")
+            .map(|list| list.children.as_slice())
+            .unwrap_or_default();
+        println!(
+            "  {}  {:?}: {} modified, {} deleted",
+            item.child_text("Start").unwrap_or_default(),
+            item.child_text("Subject").unwrap_or_default(),
+            modified.len(),
+            deleted.len()
+        );
+        let ids: Vec<String> = modified
+            .iter()
+            .filter_map(|o| o.child("ItemId")?.attribute("Id"))
+            .map(str::to_owned)
+            .collect();
+        let whole = client.items_by_id(&ids).map_err(|e| e.to_string())?;
+        for (occurrence, whole) in modified.iter().zip(whole) {
+            println!(
+                "    modified {} -> {} to {}  {:?}  {:?}",
+                occurrence.child_text("OriginalStart").unwrap_or_default(),
+                occurrence.child_text("Start").unwrap_or_default(),
+                occurrence.child_text("End").unwrap_or_default(),
+                whole.child_text("Subject").unwrap_or_default(),
+                whole.child_text("Location").unwrap_or_default()
+            );
+        }
+        for occurrence in deleted {
+            println!(
+                "    deleted  {}",
+                occurrence.child_text("Start").unwrap_or_default()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn target_pim(ews: &EwsArgs) -> Result<(), String> {
