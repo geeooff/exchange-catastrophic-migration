@@ -190,7 +190,7 @@ impl<T: Transport> GraphClient<T> {
     /// and end in UTC, and when the pattern placed it (`originalStart`).
     pub fn instances(&self, series_id: &str, from: i64, to: i64) -> Result<Vec<Value>> {
         self.get_all(&format!(
-            "/me/events/{}/instances?startDateTime={}&endDateTime={}&$select=id,type,start,end,originalStart&$top=100",
+            "/me/events/{}/instances?startDateTime={}&endDateTime={}&$select=id,type,start,end,originalStart,subject,location&$top=100",
             encode(series_id),
             encode(&ecm_model::item::format_iso(from)),
             encode(&ecm_model::item::format_iso(to)),

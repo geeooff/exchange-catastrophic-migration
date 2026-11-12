@@ -358,7 +358,8 @@ they are. Same method: a fidelity test first, then plans, then a check.
      compares each series' exceptions; `ecm target series` lists them.
    - Outlook.com: the occurrence is among the series' `instances` around that
      time, then `DELETE` or `PATCH`. `ecm check-graph-pim` reads the copy's
-     instances around the source's exceptions and compares them.
+     instances around the source's exceptions and compares them;
+     `ecm check-graph-series` lists a calendar's series with their occurrences.
    - Sources: a PST (the exceptions of `PidLidAppointmentRecur`) and an
      Exchange mailbox (the series' modified and deleted occurrences, each
      modified one read for its own subject and location).
@@ -368,7 +369,9 @@ they are. Same method: a fidelity test first, then plans, then a check.
    an Exchange 2019 mailbox, in its `ecm-test` calendar: a weekly series of 6
    occurrences, one removed, one moved to the next day with its own subject
    and location; read back, the series has exactly these two exceptions. The
-   same against Outlook.com is still to run.
+   same plan against Outlook.com, in its `ecm-test` calendar: read back
+   (`ecm check-graph-series`), the series has 5 occurrences, the removed one
+   gone and the moved one with its time, subject and location.
 8. **Clearing the trials**: `ecm plan-discard --test` plans the move of every
    `ecm-test` folder into Deleted Items, which the user empties. Deleted Items
    takes one folder of a name: each is first named after its parent

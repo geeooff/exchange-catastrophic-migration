@@ -582,7 +582,7 @@ pub(crate) fn print_checked(what: &str, checked: &Checked) {
 }
 
 #[cfg(windows)]
-pub use online::{check_graph_pim_command, plan_graph_pim_command};
+pub use online::{check_graph_pim_command, graph_series_command, plan_graph_pim_command};
 #[cfg(windows)]
 pub(crate) use online::{photo_of, read_any};
 
@@ -964,6 +964,85 @@ mod online {
         Ok(GraphClient::new(transport, token))
     }
 
+    /// Lists the series of an Outlook.com calendar (the one named `calendar`,
+    /// or the default one): how many occurrences each has within its range (two
+    /// years of it when it has no end date), when they start if they are few,
+    /// and its modified occurrences. Only reads.
+    pub fn graph_series_command(graph: &GraphArgs, calendar: Option<&str>) -> Result<(), String> {
+        let graph = sign_in(graph)?;
+        let error = |e: ecm_graph::Error| e.to_string();
+        let calendar_id = match calendar {
+            Some(name) => Some(
+                graph
+                    .find_named("/me/calendars", "name", name)
+                    .map_err(error)?
+                    .ok_or_else(|| format!("no calendar {name:?} in the mailbox"))?,
+            ),
+            None => None,
+        };
+        let events = graph.events_in(calendar_id.as_deref()).map_err(error)?;
+        let series: Vec<&Value> = events
+            .iter()
+            .filter(|e| e["type"].as_str() == Some("seriesMaster"))
+            .collect();
+        println!("{} events, {} series", events.len(), series.len());
+        let day = |value: &Value| {
+            value
+                .as_str()
+                .and_then(|date| ecm_model::item::parse_utc(&format!("{date}T00:00:00Z")))
+        };
+        let utc = |value: &Value| {
+            value["dateTime"]
+                .as_str()
+                .and_then(|text| ecm_model::item::parse_utc(&format!("{text}Z")))
+                .map(ecm_model::item::format_iso)
+                .unwrap_or_default()
+        };
+        for event in series {
+            let range = &event["recurrence"]["range"];
+            let (Some(id), Some(from)) = (event["id"].as_str(), day(&range["startDate"])) else {
+                continue;
+            };
+            let to = match range["type"].as_str() {
+                Some("endDate") => day(&range["endDate"]).unwrap_or(from),
+                _ => from + 2 * 366 * 86_400,
+            };
+            let instances = graph
+                .instances(id, from - 86_400, to + 2 * 86_400)
+                .map_err(error)?;
+            let modified: Vec<&Value> = instances
+                .iter()
+                .filter(|i| i["type"].as_str() == Some("exception"))
+                .collect();
+            println!(
+                "  {}  {:?}: {} occurrences until {}, {} modified",
+                utc(&event["start"]),
+                event["subject"].as_str().unwrap_or_default(),
+                instances.len(),
+                ecm_model::item::format_iso(to + 86_400),
+                modified.len()
+            );
+            if instances.len() <= 12 {
+                let mut starts: Vec<String> = instances.iter().map(|i| utc(&i["start"])).collect();
+                starts.sort();
+                println!("    occurrences: {}", starts.join(", "));
+            }
+            for instance in modified {
+                println!(
+                    "    modified {} -> {} to {}  {:?}  {:?}",
+                    instance["originalStart"].as_str().unwrap_or_default(),
+                    utc(&instance["start"]),
+                    utc(&instance["end"]),
+                    instance["subject"].as_str().unwrap_or_default(),
+                    instance["location"]["displayName"]
+                        .as_str()
+                        .unwrap_or_default()
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Writes a plan that copies into the Graph mailbox what of the source's
     /// calendar, contacts, tasks, inbox rules and categories it lacks. Only
     /// reads the source and the target.
@@ -1280,6 +1359,14 @@ pub fn plan_graph_pim_command(
     _: &crate::audit_cmd::GraphArgs,
     _: PimOptions,
     _: &std::path::Path,
+) -> Result<(), String> {
+    Err("Exchange and Microsoft Graph access need Windows for now (WinHTTP)".into())
+}
+
+#[cfg(not(windows))]
+pub fn graph_series_command(
+    _: &crate::audit_cmd::GraphArgs,
+    _: Option<&str>,
 ) -> Result<(), String> {
     Err("Exchange and Microsoft Graph access need Windows for now (WinHTTP)".into())
 }
