@@ -1,12 +1,19 @@
 # AGENTS.md
 
 `ecm`: Rust CLI that audits and repairs an Exchange mailbox after a botched
-migration. Sources (read-only): a PST file, and an Outlook.com mailbox through
-Microsoft Graph; Exchange over EWS as a source is planned (M7). Targets: Exchange over
-EWS, and Outlook.com through Graph (messages; other types M9b). Public repo: no
-personal data. Roadmap and design: [docs/plan.md](docs/plan.md) (milestones, mark ✅
-when done). What can be migrated: [docs/supported-migrations.md](docs/supported-migrations.md).
-Releases: [CHANGELOG.md](CHANGELOG.md).
+migration. Sources (read-only): a PST file, an Outlook.com mailbox through
+Microsoft Graph, and an Exchange mailbox over EWS for everything but messages
+(messages: planned, M7). Targets: Exchange over EWS, and Outlook.com through
+Graph (every item type but sticky notes). Public repo: no personal data.
+
+Where to look first:
+
+- [docs/supported-migrations.md](docs/supported-migrations.md): what can be
+  migrated from which source to which target, with the command and its limits.
+- [docs/plan.md](docs/plan.md): roadmap and design; each milestone says what was
+  tested on a real mailbox and what is left (search "Left for").
+- [CHANGELOG.md](CHANGELOG.md): what changed since the last release.
+- `ecm <command> --help`: what a command does and whether it only reads.
 
 ## Layout
 
@@ -20,8 +27,8 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   details, calendar items, contacts and tasks (listings and whole items), the
   category list; every change in `write`.
 - `ecm-graph`: Microsoft Graph (Outlook.com): device code sign-in, mail, calendar,
-  contacts, To Do, inbox rules, categories as a source; as a target (messages M9,
-  the other types M9b in progress), every change in `write`.
+  contacts, To Do, inbox rules, categories as a source and as a target; every
+  change in `write`.
 - `ecm-store`: JSON Lines inventories, CSV. `ecm-audit`: matching, defects, plans,
   verification.
 - `ecm-cli`: the `ecm` binary, one module per command family. `pst_pim` turns PST
@@ -35,17 +42,19 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   for writing. Use `ecm_pst::PstSource`, which opens the file read-only and shares
   read access only.
 - On a target: no hard delete (quarantine instead), and changes only through
-  `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
-  folders and `ecm-test` folders (`--test`) leave only through `plan-discard`,
-  into Deleted Items: the user empties it. An `occurrence` step removes or
-  changes one occurrence, only of a series its own plan created. In Outlook.com,
-  `ecm clear-graph-test` deletes what the trials created, which has no Deleted
-  Items to go to: only containers named `ecm-test`, disabled rules and
-  categories named `ecm-test …`, and the contacts a plan's journal names; with
-  the user's go-ahead, after a `--dry-run`. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
-  `ecm fidelity-graph-pim`, which only create items, only in `ecm-test` containers
-  (and rules, disabled, and categories named `ecm-test …`), each run with the user's
-  go-ahead.
+  `plan`/`apply`, with the user's go-ahead for each `apply` run.
+  - Quarantine run folders and `ecm-test` folders (`--test`) leave only through
+    `plan-discard`, into Deleted Items: the user empties it.
+  - An `occurrence` step removes or changes one occurrence, only of a series its
+    own plan created.
+  - Trials (`ecm fidelity-test`, `ecm fidelity-graph`, `ecm fidelity-graph-pim`)
+    only create items, only in `ecm-test` containers (and rules, disabled, and
+    categories named `ecm-test …`), each run with the user's go-ahead.
+  - The one command that deletes: `ecm clear-graph-test`, in Outlook.com, where
+    what the trials created has no Deleted Items to go to. Only containers
+    named `ecm-test`, disabled rules and categories named `ecm-test …`, and the
+    contacts a plan's journal names; with the user's go-ahead, after a
+    `--dry-run`.
 - Plans only move items `ecm` put where they are: migration debris at the top of the
   target mailbox, and items an applied plan moved or created (`--after`,
   `plan-park`).
@@ -78,6 +87,25 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   does not exist.
 - Commit only when asked. Messages say what and why, ending with the
   `Co-Authored-By` line.
+
+## Working on a real mailbox
+
+- Read first: every command that only reads says so in its help. A check exists
+  for each kind of write (`check-content`, `check-pim`, `check-graph-pim`,
+  `target series`, `check-graph-series`, `clear-graph-test --dry-run`).
+- Write in small steps: `--dry-run`, then `apply --limit 2` or `3`, check the
+  result, then the rest. Real servers answer what canned answers do not: three
+  defects were found this way, each on two or three test items.
+- An unexpected result means stop: read it, explain it, check with a read-only
+  command, and only then run again. A run repeated without that deleted the same
+  test contacts twice.
+- A command that signs in to Outlook.com prints a device code and waits: pass
+  the address and the code to the user at once (15 minutes), one sign-in per
+  command. With `--pst`, the code comes after the PST is read (minutes).
+- A PST is read twice more for its checksum, before and after: a command on a
+  large PST over a network share takes minutes before it prints anything.
+- Before a commit, look for personal data in the staged diff (names, addresses,
+  paths, subjects), not only in file names.
 
 ## Gotchas
 
