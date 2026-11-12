@@ -15,7 +15,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   Outlook.com (`plan-graph-pim`). `check-pim` and `check-graph-pim` compare
   them.
 - `target series`: list the series of a calendar folder with their modified and
-  deleted occurrences.
+  deleted occurrences. `check-graph-series`: the same for an Outlook.com
+  calendar, with each series' occurrences.
 - `plan-discard --test`: move the `ecm-test` folders of trials into Deleted
   Items, each named after its parent first.
 - PST files as a source for calendar items, contacts and their photos, and

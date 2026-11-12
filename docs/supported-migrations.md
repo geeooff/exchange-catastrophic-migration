@@ -71,8 +71,10 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
     `ecm plan-graph-pim`, trial `ecm fidelity-graph-pim`.
 [^19]: Events go without their attendees: Graph would invite them. Series
     exceptions (removed occurrences, and moved ones with their own time,
-    subject and location) are copied by `occurrence` steps, tested with
-    canned answers only: no source at hand had any.
+    subject and location) are copied by `occurrence` steps. No source at hand
+    had any: tested on a hand-made series in the `ecm-test` calendar of
+    Outlook.com, one occurrence removed and one moved, read back as planned
+    with `ecm check-graph-series`.
 [^20]: Outlook.com can move a contact out of its folder when its photo is set
     (12 of 25 in a test, into a folder Graph cannot open): `ecm check-graph-pim
     --plan` finds such copies by id.

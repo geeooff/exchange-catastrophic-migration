@@ -497,6 +497,20 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
     },
+    /// List the series of an Outlook.com calendar with their occurrences and
+    /// those that were modified. Only reads.
+    CheckGraphSeries {
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// The calendar, by name (such as `ecm-test`). The default calendar
+        /// when absent.
+        #[arg(long, value_name = "NAME")]
+        calendar: Option<String>,
+    },
     /// Compare each calendar item, contact, task, inbox rule and category of an
     /// Exchange mailbox (or calendar item, contact and task of a PST file) with
     /// its copy in an Outlook.com mailbox, property by property, and list those
@@ -926,6 +940,14 @@ fn run() -> ExitCode {
             &audit_cmd::GraphArgs { client_id, tenant },
             graph_pim_plan_cmd::PimOptions { test, only: &only },
             &plans,
+        )),
+        Command::CheckGraphSeries {
+            client_id,
+            tenant,
+            calendar,
+        } => report(graph_pim_plan_cmd::graph_series_command(
+            &audit_cmd::GraphArgs { client_id, tenant },
+            calendar.as_deref(),
         )),
         Command::ApplyGraph {
             client_id,
