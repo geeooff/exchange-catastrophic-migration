@@ -38,7 +38,11 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
   folders and `ecm-test` folders (`--test`) leave only through `plan-discard`,
   into Deleted Items: the user empties it. An `occurrence` step removes or
-  changes one occurrence, only of a series its own plan created. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
+  changes one occurrence, only of a series its own plan created. In Outlook.com,
+  `ecm clear-graph-test` deletes what the trials created, which has no Deleted
+  Items to go to: only containers named `ecm-test`, disabled rules and
+  categories named `ecm-test …`, and the contacts a plan's journal names; with
+  the user's go-ahead, after a `--dry-run`. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
   `ecm fidelity-graph-pim`, which only create items, only in `ecm-test` containers
   (and rules, disabled, and categories named `ecm-test …`), each run with the user's
   go-ahead.
@@ -113,7 +117,12 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   EWS, by the series' `UID` in a `CalendarView` of a day around it (an occurrence
   has its own item id); in Graph, among `/events/{id}/instances`. Deleted Items
   takes one folder of a name: `MoveFolder` of a second `ecm-test` answers
-  `ErrorMoveCopyFailed`, so each is renamed after its parent first.
+  `ErrorMoveCopyFailed`, so each is renamed after its parent first. The same
+  holds for a mail folder through Graph.
+- Graph `DELETE` of a contact moves it to Deleted Items, where its id stays
+  valid: a second `DELETE` removes it for good, so check `parentFolderId`
+  first. Outlook.com refuses to delete a contact folder that holds contacts
+  (`ErrorCannotDeleteObject`), and can refuse it empty too.
 - EWS `CreateItem` for a completed task: write `CompleteDate` and no `Status`.
   Exchange applies the elements in order, and `Status` `Completed` after the date
   sets it to the current day.

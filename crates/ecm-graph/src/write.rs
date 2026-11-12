@@ -327,6 +327,34 @@ impl<T: Transport> GraphClient<T> {
         }
     }
 
+    /// Deletes a resource by its path (`/me/calendars/{id}`…). A calendar, a
+    /// contact folder, a To Do list, an inbox rule and a category have no
+    /// Deleted Items to go to: only for what the trials created.
+    pub fn delete_resource(&self, path: &str) -> Result<()> {
+        self.request("DELETE", path, "application/json", None, &[], None)
+            .map(|_| ())
+    }
+
+    /// Renames a mail folder.
+    pub fn rename_mail_folder(&self, folder_id: &str, name: &str) -> Result<()> {
+        self.send_json(
+            "PATCH",
+            &format!("/me/mailFolders/{}", encode(folder_id)),
+            &serde_json::json!({"displayName": name}),
+        )
+        .map(|_| ())
+    }
+
+    /// Moves a mail folder, with what it holds, into Deleted Items.
+    pub fn move_mail_folder_to_deleted_items(&self, folder_id: &str) -> Result<()> {
+        self.send_json(
+            "POST",
+            &format!("/me/mailFolders/{}/move", encode(folder_id)),
+            &serde_json::json!({"destinationId": "deleteditems"}),
+        )
+        .map(|_| ())
+    }
+
     /// Removes one occurrence of a series, by its own id: the series keeps it
     /// as a cancelled occurrence. Only for a series without attendees, which
     /// tells no one.
@@ -597,6 +625,20 @@ mod tests {
             requests[1].2,
             r#"{"color":"preset9","displayName":"ecm-test Famille"}"#
         );
+    }
+
+    #[test]
+    fn deletes_a_resource_and_moves_a_mail_folder_to_deleted_items() {
+        let fake = FakeTransport::new([(204, String::new()), (201, r#"{"id":"F2"}"#.into())]);
+        let client = GraphClient::new(&fake, "t".into());
+        client.delete_resource("/me/calendars/C1").unwrap();
+        client.move_mail_folder_to_deleted_items("F1").unwrap();
+        let requests = fake.requests.borrow();
+        assert_eq!(requests[0].0, "DELETE");
+        assert!(requests[0].1.ends_with("/me/calendars/C1"));
+        assert_eq!(requests[1].0, "POST");
+        assert!(requests[1].1.ends_with("/me/mailFolders/F1/move"));
+        assert_eq!(requests[1].2, r#"{"destinationId":"deleteditems"}"#);
     }
 
     #[test]

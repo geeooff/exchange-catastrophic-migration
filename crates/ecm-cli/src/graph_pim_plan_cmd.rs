@@ -582,7 +582,25 @@ pub(crate) fn print_checked(what: &str, checked: &Checked) {
 }
 
 #[cfg(windows)]
-pub use online::{check_graph_pim_command, graph_series_command, plan_graph_pim_command};
+pub use online::{
+    check_graph_pim_command, clear_graph_test_command, graph_series_command, plan_graph_pim_command,
+};
+
+/// Whether an inbox rule is one a trial created: named `ecm-test …` and
+/// disabled.
+pub(crate) fn is_test_rule(rule: &Value) -> bool {
+    rule["displayName"]
+        .as_str()
+        .is_some_and(|name| name.starts_with(TEST_PREFIX))
+        && rule["isEnabled"].as_bool() == Some(false)
+}
+
+/// Whether a category is one a trial created: named `ecm-test …`.
+pub(crate) fn is_test_category(category: &Value) -> bool {
+    category["displayName"]
+        .as_str()
+        .is_some_and(|name| name.starts_with(TEST_PREFIX))
+}
 #[cfg(windows)]
 pub(crate) use online::{photo_of, read_any};
 
@@ -962,6 +980,264 @@ mod online {
         )
         .map_err(|e| e.to_string())?;
         Ok(GraphClient::new(transport, token))
+    }
+
+    /// Lists what the trials created in an Outlook.com mailbox, and unless
+    /// `dry_run` deletes it: the disabled inbox rules and the categories named
+    /// `ecm-test …`, the `ecm-test` To Do list, contact folder and calendar
+    /// with what they hold, and the contacts the `plans` created in that folder
+    /// that Outlook.com moved out of it. The `ecm-test` mail folder goes to
+    /// Deleted Items. Nothing of another name is touched.
+    pub fn clear_graph_test_command(
+        graph: &GraphArgs,
+        plans: &[std::path::PathBuf],
+        dry_run: bool,
+    ) -> Result<(), String> {
+        use ecm_graph::encode;
+
+        // The contacts the plans created in the test folder, from their
+        // journals.
+        let mut planned = Vec::new();
+        for plan in plans {
+            let actions = crate::plan_cmd::read_plan(plan)?;
+            let done = crate::plan_cmd::read_journal(&crate::plan_cmd::journal_path(plan))?;
+            for (step, action) in actions.iter().enumerate() {
+                if let Action::CreateGraph { kind, to, .. } = action
+                    && kind == "contact"
+                    && to == TEST_FOLDER
+                    && let Some(id) = done.get(&step).and_then(|line| line.id.clone())
+                {
+                    planned.push(id);
+                }
+            }
+        }
+
+        let transport = ecm_graph::WinHttpTransport::default();
+        let tokens = ecm_graph::auth::sign_in_with_scopes(
+            &transport,
+            &graph.client_id,
+            &graph.tenant,
+            ecm_graph::auth::PIM_WRITE_SCOPES,
+            &mut |prompt| {
+                eprintln!();
+                eprintln!(
+                    "Sign in to Outlook.com (to list{} what the trials created, named {TEST_FOLDER}, only): open {} and enter the code {}",
+                    if dry_run { "" } else { " and delete" },
+                    prompt.verification_uri,
+                    prompt.user_code
+                );
+                eprintln!("(Waiting for you to sign in...)");
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let graph = GraphClient::new(transport, tokens.access);
+        let error = |e: ecm_graph::Error| e.to_string();
+        let name =
+            |value: &Value, field: &str| value[field].as_str().unwrap_or_default().to_owned();
+        let count = |collection: String| -> Result<usize, String> {
+            Ok(graph
+                .get_all(&format!("{collection}?$select=id&$top=100"))
+                .map_err(error)?
+                .len())
+        };
+
+        // What to delete: its description and its path.
+        let mut found: Vec<(String, String)> = Vec::new();
+        for rule in graph.inbox_rules().map_err(error)? {
+            if is_test_rule(&rule) {
+                found.push((
+                    format!("disabled inbox rule {:?}", name(&rule, "displayName")),
+                    format!(
+                        "/me/mailFolders/inbox/messageRules/{}",
+                        encode(&name(&rule, "id"))
+                    ),
+                ));
+            }
+        }
+        for category in graph.master_categories().map_err(error)? {
+            if is_test_category(&category) {
+                found.push((
+                    format!("category {:?}", name(&category, "displayName")),
+                    format!(
+                        "/me/outlook/masterCategories/{}",
+                        encode(&name(&category, "id"))
+                    ),
+                ));
+            }
+        }
+        let folder = graph
+            .find_named("/me/contactFolders", "displayName", TEST_FOLDER)
+            .map_err(error)?;
+        // A deleted contact keeps its id in Deleted Items: deleting it again
+        // would take it out of there for good.
+        let deleted_items = graph
+            .get("/me/mailFolders/deleteditems?$select=id")
+            .map_err(error)?["id"]
+            .as_str()
+            .map(str::to_owned);
+        for id in &planned {
+            let path = format!("/me/contacts/{}", encode(id));
+            match graph.get(&format!("{path}?$select=id,displayName,parentFolderId")) {
+                Ok(contact) => {
+                    let parent = contact["parentFolderId"].as_str();
+                    // Still in the test folder, or already in Deleted Items.
+                    if parent == folder.as_deref() || parent == deleted_items.as_deref() {
+                        continue;
+                    }
+                    found.push((
+                        format!(
+                            "contact {:?}, which Outlook.com moved out of the {TEST_FOLDER} folder",
+                            name(&contact, "displayName")
+                        ),
+                        path,
+                    ));
+                }
+                // Deleted since.
+                Err(ecm_graph::Error::Graph { status: 404, .. }) => {}
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        if let Some(id) = graph
+            .find_named("/me/todo/lists", "displayName", TEST_FOLDER)
+            .map_err(error)?
+        {
+            let path = format!("/me/todo/lists/{}", encode(&id));
+            let tasks = count(format!("{path}/tasks"))?;
+            found.push((
+                format!("To Do list {TEST_FOLDER:?} with its {tasks} tasks"),
+                path,
+            ));
+        }
+        // Outlook.com only deletes a contact folder empty
+        // (`ErrorCannotDeleteObject`): its contacts go first.
+        let mut folder_contacts = Vec::new();
+        if let Some(id) = &folder {
+            let path = format!("/me/contactFolders/{}", encode(id));
+            folder_contacts = graph
+                .get_all(&format!("{path}/contacts?$select=id&$top=100"))
+                .map_err(error)?
+                .iter()
+                .filter_map(|contact| contact["id"].as_str())
+                .map(|contact| format!("{path}/contacts/{}", encode(contact)))
+                .collect();
+            found.push((
+                format!(
+                    "contact folder {TEST_FOLDER:?} with its {} contacts",
+                    folder_contacts.len()
+                ),
+                path,
+            ));
+        }
+        if let Some(id) = graph
+            .find_named("/me/calendars", "name", TEST_FOLDER)
+            .map_err(error)?
+        {
+            let path = format!("/me/calendars/{}", encode(&id));
+            let events = count(format!("{path}/events"))?;
+            found.push((
+                format!("calendar {TEST_FOLDER:?} with its {events} events"),
+                path,
+            ));
+        }
+        let mail = graph
+            .get_all("/me/mailFolders?$select=id,displayName,totalItemCount&$top=100")
+            .map_err(error)?
+            .into_iter()
+            .find(|f| f["displayName"].as_str() == Some(TEST_FOLDER));
+
+        if found.is_empty() && mail.is_none() {
+            println!("Nothing of the trials is left in the mailbox.");
+            return Ok(());
+        }
+        println!("{}:", if dry_run { "Would delete" } else { "Deleting" });
+        let mut failed = 0;
+        for (what, path) in &found {
+            if dry_run {
+                println!("  {what}");
+                continue;
+            }
+            let emptied = if path.starts_with("/me/contactFolders/") {
+                folder_contacts
+                    .iter()
+                    .try_for_each(|contact| graph.delete_resource(contact))
+            } else {
+                Ok(())
+            };
+            let was_emptied = emptied.is_ok() && path.starts_with("/me/contactFolders/");
+            match emptied.and_then(|()| graph.delete_resource(path)) {
+                Ok(()) => println!("  deleted: {what}"),
+                // Outlook.com can refuse to delete a contact folder, even
+                // empty.
+                Err(e) if was_emptied => {
+                    failed += 1;
+                    println!(
+                        "  FAILED: {what}: its contacts are deleted, the folder itself is refused ({e}): delete the empty folder yourself"
+                    );
+                }
+                Err(e) => {
+                    failed += 1;
+                    println!("  FAILED: {what}: {e}");
+                }
+            }
+        }
+        if let Some(mail) = &mail {
+            let what = format!(
+                "mail folder {TEST_FOLDER:?} with its {} messages, into Deleted Items",
+                mail["totalItemCount"].as_u64().unwrap_or_default()
+            );
+            if dry_run {
+                println!("  {what}");
+            } else {
+                // Deleted Items takes one folder of a name
+                // (`ErrorMoveCopyFailed`): the folder is then named apart.
+                let id = name(mail, "id");
+                let moved = graph.move_mail_folder_to_deleted_items(&id).or_else(|_| {
+                    graph
+                        .rename_mail_folder(&id, &format!("{TEST_FOLDER} (trials)"))
+                        .and_then(|()| graph.move_mail_folder_to_deleted_items(&id))
+                });
+                match moved {
+                    Ok(()) => println!("  moved: {what}"),
+                    Err(e) => {
+                        failed += 1;
+                        println!("  FAILED: {what}: {e}");
+                    }
+                }
+            }
+        }
+        println!(
+            "Contacts a trial created outside a plan and Outlook.com moved out of the {TEST_FOLDER} folder cannot be listed: look for them among your contacts."
+        );
+        if !dry_run {
+            let mut left = Vec::new();
+            for (collection, field, what) in [
+                ("/me/calendars", "name", "calendar"),
+                ("/me/contactFolders", "displayName", "contact folder"),
+                ("/me/todo/lists", "displayName", "To Do list"),
+                ("/me/mailFolders", "displayName", "mail folder"),
+            ] {
+                if graph
+                    .find_named(collection, field, TEST_FOLDER)
+                    .map_err(error)?
+                    .is_some()
+                {
+                    left.push(what);
+                }
+            }
+            if left.is_empty() {
+                println!("Read again: nothing named {TEST_FOLDER} is left.");
+            } else {
+                println!("Read again: still there: {}", left.join(", "));
+            }
+        }
+        if dry_run {
+            println!("Dry run: nothing was deleted.");
+            Ok(())
+        } else if failed > 0 {
+            Err(format!("{failed} could not be deleted"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Lists the series of an Outlook.com calendar (the one named `calendar`,
@@ -1364,6 +1640,15 @@ pub fn plan_graph_pim_command(
 }
 
 #[cfg(not(windows))]
+pub fn clear_graph_test_command(
+    _: &crate::audit_cmd::GraphArgs,
+    _: &[std::path::PathBuf],
+    _: bool,
+) -> Result<(), String> {
+    Err("Exchange and Microsoft Graph access need Windows for now (WinHTTP)".into())
+}
+
+#[cfg(not(windows))]
 pub fn graph_series_command(
     _: &crate::audit_cmd::GraphArgs,
     _: Option<&str>,
@@ -1384,6 +1669,26 @@ pub fn check_graph_pim_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_what_trials_named_is_theirs() {
+        use serde_json::json;
+        // A trial's rule is named `ecm-test …` and disabled.
+        assert!(is_test_rule(
+            &json!({"displayName": "ecm-test Invoices", "isEnabled": false})
+        ));
+        for rule in [
+            json!({"displayName": "ecm-test Invoices", "isEnabled": true}),
+            json!({"displayName": "Invoices", "isEnabled": false}),
+            json!({"displayName": "ecm-testing", "isEnabled": false}),
+            json!({"isEnabled": false}),
+        ] {
+            assert!(!is_test_rule(&rule), "{rule}");
+        }
+        assert!(is_test_category(&json!({"displayName": "ecm-test Family"})));
+        assert!(!is_test_category(&json!({"displayName": "Family"})));
+        assert!(!is_test_category(&json!({"displayName": "ecm-test"})));
+    }
 
     fn element(xml: &str) -> Element {
         let document = format!(

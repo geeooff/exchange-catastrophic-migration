@@ -25,7 +25,7 @@ to what can be migrated. Milestones: [plan.md](plan.md#7-milestones).
 | Calendar | 🟡 `ecm plan-pim --pst`[^23] | 🟡 `ecm plan-graph-pim --pst`[^19][^23] | 🟡 `ecm plan-pim`[^11] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^19] |
 | Contacts | ✅ `ecm plan-pim --pst`[^24] | ✅ `ecm plan-graph-pim --pst`[^23] | ✅ `ecm plan-pim` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
 | Contact photos | ✅ `ecm plan-pim --pst` | ✅ `ecm plan-graph-pim --pst`[^20] | ✅ `ecm plan-contact-photos` | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim`[^20] |
-| Tasks | ✅ `ecm plan-pim --pst`[^25] | 🟡 `ecm plan-graph-pim --pst`[^26] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
+| Tasks | ✅ `ecm plan-pim --pst`[^25] | ✅ `ecm plan-graph-pim --pst`[^26] | ✅ `ecm plan-pim`[^12] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^21] |
 | Sticky notes | ✅ `ecm plan-notes` | ⏳ M9b[^13] | ✗[^13] | ✗ | ⏳ M7 | ⏳ M9b[^13] |
 | Inbox rules | ✗[^14] | ✗[^14] | 🟡 `ecm plan-rules`[^15] | ✗ | ⏳ M7 | 🟡 `ecm plan-graph-pim`[^22] |
 | Categories | ✗ | ✗ | ✗ | ✗ | ⏳ M7 | ✅ `ecm plan-graph-pim` |
@@ -78,7 +78,8 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 [^20]: Outlook.com can move a contact out of its folder when its photo is set
     (12 of 25 in a test, into a folder Graph cannot open): `ecm check-graph-pim
     --plan` finds such copies by id.
-[^21]: Into To Do; untested: the test mailbox had no tasks.
+[^21]: Into To Do; untested from an Exchange mailbox (the test mailbox had no
+    tasks), but PST tasks take the same conversion[^26].
 [^22]: Tested on rules moving mail by sender or subject; folders by path, created
     when missing. Conditions and actions Graph lacks are listed.
 [^23]: From the PST's calendar, contact and task folders outside Deleted Items,
@@ -102,4 +103,6 @@ resumable. Nothing is ever deleted. Graph → Graph is not planned.
 [^25]: Tested on the 35 tasks of a PST copied into the `ecm-test` task folder of
     an Exchange 2019 mailbox (`--test`): status, importance, body, due and
     completion dates equal to the PST. None had a recurrence or a reminder.
-[^26]: The conversion was checked in a dry run on 35 tasks; none was copied.
+[^26]: Into To Do. Tested by a trial of 3 of a PST's 35 tasks (completed, in
+    progress, not started; due and completion dates, a body), all equal to the
+    PST; the conversion of the 35 was checked in a dry run.
