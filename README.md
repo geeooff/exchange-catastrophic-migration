@@ -12,8 +12,8 @@ arrived after the migration.
 > about 21,000 messages that a migration had copied four times, with emptied bodies,
 > corrupted attachments, lost senders and mangled dates, then checked every copy
 > against two PSTs. Through Microsoft Graph, it repaired an Outlook.com mailbox's
-> messages and copied calendar items, contacts, rules and categories into it; tasks
-> and notes are still to validate there. See [docs/plan.md](docs/plan.md).
+> messages and copied calendar items, contacts, tasks, rules and categories into
+> it; sticky notes are still to validate there. See [docs/plan.md](docs/plan.md).
 > What can be migrated, from which source to which target:
 > [docs/supported-migrations.md](docs/supported-migrations.md).
 

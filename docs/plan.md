@@ -347,6 +347,14 @@ they are. Same method: a fidelity test first, then plans, then a check.
    Tasks into Outlook.com: a trial of 3 of these 35 tasks (completed, in
    progress, not started; due and completion dates, a body) into the
    `ecm-test` To Do list, every compared property equal.
+
+   Left for M10, an open question: compared with the live mailbox it was
+   exported from (`ecm check-graph-pim --pst --only contact`, read-only), a
+   real export's 167 contacts were all found, but 52 differ, nearly always by
+   a postal address the PST reading gives as the business address and Graph
+   does not. Whether `pst_pim` files an address under the wrong kind (work,
+   home, other) is to be checked on a few contacts, property by property.
+   Trials that copy a PST and compare the copy with it cannot show this.
 7. **Series exceptions**, for both targets: the series is created, then an
    `occurrence` step for each exception of its source removes or changes one
    occurrence of the copy, found by the time the pattern places it. Removals
