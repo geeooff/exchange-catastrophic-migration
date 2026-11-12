@@ -335,6 +335,16 @@ impl<T: Transport> GraphClient<T> {
             .map(|_| ())
     }
 
+    /// Renames a mail folder.
+    pub fn rename_mail_folder(&self, folder_id: &str, name: &str) -> Result<()> {
+        self.send_json(
+            "PATCH",
+            &format!("/me/mailFolders/{}", encode(folder_id)),
+            &serde_json::json!({"displayName": name}),
+        )
+        .map(|_| ())
+    }
+
     /// Moves a mail folder, with what it holds, into Deleted Items.
     pub fn move_mail_folder_to_deleted_items(&self, folder_id: &str) -> Result<()> {
         self.send_json(

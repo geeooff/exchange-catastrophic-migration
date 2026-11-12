@@ -1068,19 +1068,32 @@ mod online {
         let folder = graph
             .find_named("/me/contactFolders", "displayName", TEST_FOLDER)
             .map_err(error)?;
+        // A deleted contact keeps its id in Deleted Items: deleting it again
+        // would take it out of there for good.
+        let deleted_items = graph
+            .get("/me/mailFolders/deleteditems?$select=id")
+            .map_err(error)?["id"]
+            .as_str()
+            .map(str::to_owned);
         for id in &planned {
             let path = format!("/me/contacts/{}", encode(id));
             match graph.get(&format!("{path}?$select=id,displayName,parentFolderId")) {
-                Ok(contact) if contact["parentFolderId"].as_str() != folder.as_deref() => found
-                    .push((
+                Ok(contact) => {
+                    let parent = contact["parentFolderId"].as_str();
+                    // Still in the test folder, or already in Deleted Items.
+                    if parent == folder.as_deref() || parent == deleted_items.as_deref() {
+                        continue;
+                    }
+                    found.push((
                         format!(
                             "contact {:?}, which Outlook.com moved out of the {TEST_FOLDER} folder",
                             name(&contact, "displayName")
                         ),
                         path,
-                    )),
-                // Still in the folder, or deleted since.
-                Ok(_) | Err(ecm_graph::Error::Graph { status: 404, .. }) => {}
+                    ));
+                }
+                // Deleted since.
+                Err(ecm_graph::Error::Graph { status: 404, .. }) => {}
                 Err(e) => return Err(e.to_string()),
             }
         }
@@ -1095,11 +1108,23 @@ mod online {
                 path,
             ));
         }
+        // Outlook.com only deletes a contact folder empty
+        // (`ErrorCannotDeleteObject`): its contacts go first.
+        let mut folder_contacts = Vec::new();
         if let Some(id) = &folder {
             let path = format!("/me/contactFolders/{}", encode(id));
-            let contacts = count(format!("{path}/contacts"))?;
+            folder_contacts = graph
+                .get_all(&format!("{path}/contacts?$select=id&$top=100"))
+                .map_err(error)?
+                .iter()
+                .filter_map(|contact| contact["id"].as_str())
+                .map(|contact| format!("{path}/contacts/{}", encode(contact)))
+                .collect();
             found.push((
-                format!("contact folder {TEST_FOLDER:?} with its {contacts} contacts"),
+                format!(
+                    "contact folder {TEST_FOLDER:?} with its {} contacts",
+                    folder_contacts.len()
+                ),
                 path,
             ));
         }
@@ -1131,8 +1156,24 @@ mod online {
                 println!("  {what}");
                 continue;
             }
-            match graph.delete_resource(path) {
+            let emptied = if path.starts_with("/me/contactFolders/") {
+                folder_contacts
+                    .iter()
+                    .try_for_each(|contact| graph.delete_resource(contact))
+            } else {
+                Ok(())
+            };
+            let was_emptied = emptied.is_ok() && path.starts_with("/me/contactFolders/");
+            match emptied.and_then(|()| graph.delete_resource(path)) {
                 Ok(()) => println!("  deleted: {what}"),
+                // Outlook.com can refuse to delete a contact folder, even
+                // empty.
+                Err(e) if was_emptied => {
+                    failed += 1;
+                    println!(
+                        "  FAILED: {what}: its contacts are deleted, the folder itself is refused ({e}): delete the empty folder yourself"
+                    );
+                }
                 Err(e) => {
                     failed += 1;
                     println!("  FAILED: {what}: {e}");
@@ -1147,7 +1188,15 @@ mod online {
             if dry_run {
                 println!("  {what}");
             } else {
-                match graph.move_mail_folder_to_deleted_items(&name(mail, "id")) {
+                // Deleted Items takes one folder of a name
+                // (`ErrorMoveCopyFailed`): the folder is then named apart.
+                let id = name(mail, "id");
+                let moved = graph.move_mail_folder_to_deleted_items(&id).or_else(|_| {
+                    graph
+                        .rename_mail_folder(&id, &format!("{TEST_FOLDER} (trials)"))
+                        .and_then(|()| graph.move_mail_folder_to_deleted_items(&id))
+                });
+                match moved {
                     Ok(()) => println!("  moved: {what}"),
                     Err(e) => {
                         failed += 1;
@@ -1159,6 +1208,28 @@ mod online {
         println!(
             "Contacts a trial created outside a plan and Outlook.com moved out of the {TEST_FOLDER} folder cannot be listed: look for them among your contacts."
         );
+        if !dry_run {
+            let mut left = Vec::new();
+            for (collection, field, what) in [
+                ("/me/calendars", "name", "calendar"),
+                ("/me/contactFolders", "displayName", "contact folder"),
+                ("/me/todo/lists", "displayName", "To Do list"),
+                ("/me/mailFolders", "displayName", "mail folder"),
+            ] {
+                if graph
+                    .find_named(collection, field, TEST_FOLDER)
+                    .map_err(error)?
+                    .is_some()
+                {
+                    left.push(what);
+                }
+            }
+            if left.is_empty() {
+                println!("Read again: nothing named {TEST_FOLDER} is left.");
+            } else {
+                println!("Read again: still there: {}", left.join(", "));
+            }
+        }
         if dry_run {
             println!("Dry run: nothing was deleted.");
             Ok(())

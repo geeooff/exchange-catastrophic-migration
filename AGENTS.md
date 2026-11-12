@@ -117,7 +117,12 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   EWS, by the series' `UID` in a `CalendarView` of a day around it (an occurrence
   has its own item id); in Graph, among `/events/{id}/instances`. Deleted Items
   takes one folder of a name: `MoveFolder` of a second `ecm-test` answers
-  `ErrorMoveCopyFailed`, so each is renamed after its parent first.
+  `ErrorMoveCopyFailed`, so each is renamed after its parent first. The same
+  holds for a mail folder through Graph.
+- Graph `DELETE` of a contact moves it to Deleted Items, where its id stays
+  valid: a second `DELETE` removes it for good, so check `parentFolderId`
+  first. Outlook.com refuses to delete a contact folder that holds contacts
+  (`ErrorCannotDeleteObject`), and can refuse it empty too.
 - EWS `CreateItem` for a completed task: write `CompleteDate` and no `Status`.
   Exchange applies the elements in order, and `Status` `Completed` after the date
   sets it to the current day.

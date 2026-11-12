@@ -385,7 +385,20 @@ they are. Same method: a fidelity test first, then plans, then a check.
    categories named `ecm-test …`, and the contacts a plan created in the test
    folder that Outlook.com moved out of it (found by the ids in the plan's
    journal). Nothing of another name is touched; the `ecm-test` mail folder
-   goes to Deleted Items.
+   goes to Deleted Items. Run on a real Outlook.com mailbox: 3 rules, 5
+   categories, a To Do list, a calendar of 432 events, 174 contacts and a mail
+   folder went; the mailbox's own 167 contacts, compared with a PST export
+   afterwards, were all there. What it showed:
+   - a contact folder is refused while it holds contacts
+     (`ErrorCannotDeleteObject`), and this one was still refused once empty:
+     its contacts are deleted one by one, and the user deletes the empty
+     folder;
+   - a deleted contact keeps its id in Deleted Items, where a second `DELETE`
+     removes it for good: a contact whose parent is Deleted Items is left
+     alone. The first version took such contacts for ones moved out of the
+     test folder and deleted them twice;
+   - Deleted Items takes one mail folder of a name, as in Exchange: on
+     `ErrorMoveCopyFailed` the folder is renamed, then moved.
 
 ## 8. Testing
 
