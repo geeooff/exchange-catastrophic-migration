@@ -259,7 +259,8 @@ Milestone M9b, after messages (M9). Same method: a fidelity test first, then pla
      plan's journal (`--plan`), and deleting the test folder does not remove them;
    - Graph keeps an all-day event as days, in UTC: such events compare by day.
 
-   Left for M9b: tasks and notes (the test source had none). Series
+   Left for M9b: notes (the test source had none); tasks were tried from a
+   PST, which takes the same conversion. Series
    exceptions: see [PST as a source](#pst-as-a-source-for-calendar-items-contacts-and-tasks),
    point 7.
 
@@ -343,7 +344,9 @@ they are. Same method: a fidelity test first, then plans, then a check.
    current day. A completed task is now written by its date alone. None of
    these tasks had a recurrence or a reminder.
 
-   Left for M10: tasks into Outlook.com were checked in a dry run only.
+   Tasks into Outlook.com: a trial of 3 of these 35 tasks (completed, in
+   progress, not started; due and completion dates, a body) into the
+   `ecm-test` To Do list, every compared property equal.
 7. **Series exceptions**, for both targets: the series is created, then an
    `occurrence` step for each exception of its source removes or changes one
    occurrence of the copy, found by the time the pattern places it. Removals
@@ -375,7 +378,14 @@ they are. Same method: a fidelity test first, then plans, then a check.
 8. **Clearing the trials**: `ecm plan-discard --test` plans the move of every
    `ecm-test` folder into Deleted Items, which the user empties. Deleted Items
    takes one folder of a name: each is first named after its parent
-   (`ecm-test (Contacts)`).
+   (`ecm-test (Contacts)`). In Outlook.com, a calendar, a contact folder, a To
+   Do list, a rule and a category have no Deleted Items to go to:
+   `ecm clear-graph-test` lists (`--dry-run`), then deletes, the `ecm-test`
+   calendar, contact folder and To Do list, the disabled rules and the
+   categories named `ecm-test …`, and the contacts a plan created in the test
+   folder that Outlook.com moved out of it (found by the ids in the plan's
+   journal). Nothing of another name is touched; the `ecm-test` mail folder
+   goes to Deleted Items.
 
 ## 8. Testing
 

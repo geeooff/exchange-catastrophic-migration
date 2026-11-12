@@ -497,6 +497,27 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
     },
+    /// Delete what the trials created in an Outlook.com mailbox: the `ecm-test`
+    /// calendar, contact folder and To Do list with what they hold, and the
+    /// disabled inbox rules and the categories named `ecm-test …`. The
+    /// `ecm-test` mail folder goes to Deleted Items. Nothing of another name
+    /// is touched. Run it with `--dry-run` first.
+    ClearGraphTest {
+        /// Client id of the Microsoft Graph app registration.
+        #[arg(long, value_name = "ID")]
+        client_id: String,
+        /// Sign-in authority: `consumers` for Outlook.com.
+        #[arg(long, value_name = "TENANT", default_value = "consumers")]
+        tenant: String,
+        /// A plan applied with `--test`: the contacts it created in the
+        /// `ecm-test` folder that Outlook.com moved out of it are deleted too.
+        /// Repeat for several.
+        #[arg(long = "plan", value_name = "FILE")]
+        plans: Vec<PathBuf>,
+        /// Only list what would be deleted.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// List the series of an Outlook.com calendar with their occurrences and
     /// those that were modified. Only reads.
     CheckGraphSeries {
@@ -940,6 +961,16 @@ fn run() -> ExitCode {
             &audit_cmd::GraphArgs { client_id, tenant },
             graph_pim_plan_cmd::PimOptions { test, only: &only },
             &plans,
+        )),
+        Command::ClearGraphTest {
+            client_id,
+            tenant,
+            plans,
+            dry_run,
+        } => report(graph_pim_plan_cmd::clear_graph_test_command(
+            &audit_cmd::GraphArgs { client_id, tenant },
+            &plans,
+            dry_run,
         )),
         Command::CheckGraphSeries {
             client_id,

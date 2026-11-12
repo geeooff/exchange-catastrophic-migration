@@ -19,6 +19,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
   calendar, with each series' occurrences.
 - `plan-discard --test`: move the `ecm-test` folders of trials into Deleted
   Items, each named after its parent first.
+- `clear-graph-test`: list (`--dry-run`), then delete, what the trials created
+  in an Outlook.com mailbox: the `ecm-test` calendar, contact folder and To Do
+  list, the disabled rules and the categories named `ecm-test …`, and the
+  contacts of a plan that Outlook.com moved out of the test folder.
 - PST files as a source for calendar items, contacts and their photos, and
   tasks. Every property is read, named ones through the PST's own map, with
   series (their pattern, range and exceptions), time zones and attendees.

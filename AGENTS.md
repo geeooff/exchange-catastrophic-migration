@@ -38,7 +38,11 @@ Releases: [CHANGELOG.md](CHANGELOG.md).
   `plan`/`apply`, with the user's go-ahead for each `apply` run. Quarantine run
   folders and `ecm-test` folders (`--test`) leave only through `plan-discard`,
   into Deleted Items: the user empties it. An `occurrence` step removes or
-  changes one occurrence, only of a series its own plan created. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
+  changes one occurrence, only of a series its own plan created. In Outlook.com,
+  `ecm clear-graph-test` deletes what the trials created, which has no Deleted
+  Items to go to: only containers named `ecm-test`, disabled rules and
+  categories named `ecm-test …`, and the contacts a plan's journal names; with
+  the user's go-ahead, after a `--dry-run`. The exceptions are the trials `ecm fidelity-test`, `ecm fidelity-graph` and
   `ecm fidelity-graph-pim`, which only create items, only in `ecm-test` containers
   (and rules, disabled, and categories named `ecm-test …`), each run with the user's
   go-ahead.
